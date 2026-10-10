@@ -1,0 +1,4 @@
+# Statically link the C runtime on Windows so users do not need the
+# "Visual C++ Redistributable" installed. (Linux release builds use musl.)
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
