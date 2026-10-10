@@ -10,16 +10,16 @@ Type `cdx`, browse, press **Space**, and your shell is now in that folder.
 
 ## Install
 
-Replace `OWNER/REPO` with this project's GitHub repository.
+Replace `vinayakkuradia/cdx` with this project's GitHub cdxsitory.
 
 **macOS / Linux**
 ```sh
-curl -fsSL https://github.com/OWNER/REPO/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/vinayakkuradia/cdx/releases/latest/download/install.sh | sh
 ```
 
 **Windows (PowerShell)**
 ```powershell
-irm https://github.com/OWNER/REPO/releases/latest/download/install.ps1 | iex
+irm https://github.com/vinayakkuradia/cdx/releases/latest/download/install.ps1 | iex
 ```
 
 Then open a new terminal and type `cdx`.
@@ -36,18 +36,18 @@ Nothing needs Rust, admin rights, or `sudo`.
 | `CDX_NO_MODIFY_SHELL=1`     | do not edit any shell config or profile |
 
 ```sh
-curl -fsSL https://github.com/OWNER/REPO/releases/latest/download/install.sh | CDX_VERSION=v0.1.0 sh
+curl -fsSL https://github.com/vinayakkuradia/cdx/releases/latest/download/install.sh | CDX_VERSION=v0.1.0 sh
 ```
 ```powershell
-$env:CDX_VERSION = 'v0.1.0'; irm https://github.com/OWNER/REPO/releases/latest/download/install.ps1 | iex
+$env:CDX_VERSION = 'v0.1.0'; irm https://github.com/vinayakkuradia/cdx/releases/latest/download/install.ps1 | iex
 ```
 
 **Uninstall**
 ```sh
-curl -fsSL https://github.com/OWNER/REPO/releases/latest/download/install.sh | sh -s -- --uninstall
+curl -fsSL https://github.com/vinayakkuradia/cdx/releases/latest/download/install.sh | sh -s -- --uninstall
 ```
 ```powershell
-$env:CDX_UNINSTALL = '1'; irm https://github.com/OWNER/REPO/releases/latest/download/install.ps1 | iex
+$env:CDX_UNINSTALL = '1'; irm https://github.com/vinayakkuradia/cdx/releases/latest/download/install.ps1 | iex
 ```
 
 Supported platforms: Linux (x86_64, ARM64; static, any distro), macOS (Intel, Apple Silicon),
@@ -192,7 +192,7 @@ cargo build --release    # LTO + strip, around 0.5 MB
 1. Bump `version` in `Cargo.toml`, run `cargo build` (updates `Cargo.lock`), commit and push.
 2. Tag and push: `git tag v0.1.1 && git push origin v0.1.1`
 3. The **release** workflow builds six targets, packages them with checksums, stamps your
-   repository into `install.sh` / `install.ps1`, and publishes a GitHub release.
+   cdxsitory into `install.sh` / `install.ps1`, and publishes a GitHub release.
    It refuses to run if the tag does not match the version in `Cargo.toml`.
 
 Each release contains `cdx-<target>.tar.gz` / `.zip`, a matching `.sha256`, and the two installers.
