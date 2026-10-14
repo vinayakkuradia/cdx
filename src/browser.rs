@@ -7,7 +7,6 @@
 //! Two modes decide where the cursor lives: `Nav` (the default) and `Favs`
 //! (entered with Tab, for reordering, renaming and removing favourites).
 
-use std::fs;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -46,6 +45,7 @@ enum Kind {
     Drive,
 }
 
+#[derive(Clone)]
 struct Entry {
     label: String,
     path: PathBuf,
@@ -69,10 +69,16 @@ struct State {
     // navigation
     loc: Location,
     show_hidden: bool,
+    /// Everything in the folder; `entries` is the part that matches `filter`.
+    all: Vec<Entry>,
     entries: Vec<Entry>,
     cursor: usize,
     scroll: usize,
     page: usize,
+    /// Text typed after `/`. Stays applied after filter mode is closed.
+    filter: String,
+    /// The filter box has the keyboard.
+    filtering: bool,
     // favourites
     favs: Vec<Favorite>,
     store: Option<PathBuf>,
@@ -88,6 +94,9 @@ struct State {
     notice: Option<String>,
     term_w: usize,
 }
+
+/// Longest filter we accept; more than a name could ever need.
+const FILTER_MAX_CHARS: usize = 64;
 
 /// Restores the terminal no matter how we leave (return, error, or panic).
 struct TermGuard;
@@ -148,10 +157,13 @@ impl State {
         let mut state = State {
             loc: Location::Dir(start),
             show_hidden,
+            all: Vec::new(),
             entries: Vec::new(),
             cursor: 0,
             scroll: 0,
             page: 10,
+            filter: String::new(),
+            filtering: false,
             favs,
             store,
             mode: Mode::Nav,
@@ -205,6 +217,22 @@ impl State {
             }
         }
 
+        self.all = entries;
+        self.apply_filter(focus);
+    }
+
+    /// Rebuild the visible list from `all` and the filter text (case-insensitive,
+    /// matches anywhere in the name). The "." row is always kept.
+    fn apply_filter(&mut self, focus: Option<&Path>) {
+        let needle = self.filter.to_lowercase();
+        let entries: Vec<Entry> = self
+            .all
+            .iter()
+            .filter(|e| {
+                e.kind == Kind::Here || needle.is_empty() || e.label.to_lowercase().contains(&needle)
+            })
+            .cloned()
+            .collect();
         // Land on the first real folder by default, so Space never picks "." by accident.
         let default = if entries.len() > 1 { 1 } else { 0 };
         self.cursor = focus
@@ -233,8 +261,9 @@ impl State {
             return;
         }
         let path = entry.path.clone();
-        match fs::read_dir(&path) {
+        match fsutil::read_dir(&path) {
             Ok(_) => {
+                self.filter.clear();
                 self.loc = Location::Dir(path);
                 self.reload(None);
             }
@@ -254,6 +283,7 @@ impl State {
             // The filesystem root elsewhere: nowhere further to go.
             _ => return,
         };
+        self.filter.clear();
         self.reload(Some(&from));
     }
 
@@ -266,6 +296,7 @@ impl State {
     fn go_home(&mut self) {
         match fsutil::home_dir() {
             Some(home) => {
+                self.filter.clear();
                 self.loc = Location::Dir(home);
                 self.reload(None);
             }
@@ -312,10 +343,11 @@ impl State {
         }
     }
 
-    /// `b`: bookmark the folder we are in.
-    fn bookmark_current(&mut self) {
-        let Some(path) = self.current_dir().map(Path::to_path_buf) else {
-            self.notice = Some("open a folder first (drive lists cannot be bookmarked)".into());
+    /// `b`: bookmark the highlighted item. On the "." row that is the folder we
+    /// are standing in.
+    fn bookmark_highlighted(&mut self) {
+        let Some(path) = self.entries.get(self.cursor).map(|e| e.path.clone()) else {
+            self.notice = Some("nothing to bookmark here".into());
             return;
         };
         if let Some(i) = self.favs.iter().position(|f| f.path == path) {
@@ -345,7 +377,7 @@ impl State {
         let idx = (digit as u8 - b'1') as usize;
         if idx >= self.favs.len() {
             self.notice = Some(format!(
-                "slot {} is empty. Press b to bookmark the current folder",
+                "slot {} is empty. Press b to bookmark the highlighted folder",
                 idx + 1
             ));
             return;
@@ -366,8 +398,9 @@ impl State {
     fn jump_to_fav(&mut self, idx: usize) {
         let path = self.favs[idx].path.clone();
         let label = self.favs[idx].label();
-        match fs::read_dir(&path) {
+        match fsutil::read_dir(&path) {
             Ok(_) => {
+                self.filter.clear();
                 self.loc = Location::Dir(path);
                 self.reload(None);
             }
@@ -390,7 +423,7 @@ impl State {
                         "window too narrow for favourites (needs {MIN_WIDTH_FOR_FAVS} columns)"
                     ));
                 } else if self.favs.is_empty() {
-                    self.notice = Some("no favourites yet. Press b to bookmark this folder".into());
+                    self.notice = Some("no favourites yet. Press b to bookmark the highlighted folder".into());
                 } else {
                     self.mode = Mode::Favs;
                     let start = self.current_fav_index().unwrap_or(self.fav_cursor);
@@ -454,6 +487,17 @@ impl State {
         }
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        // While the filter box is open, typed characters (digits and `b` included)
+        // go into it. Ctrl-C still quits.
+        if self.filtering {
+            if ctrl && key.code == KeyCode::Char('c') {
+                return Some(Outcome::Cancelled);
+            }
+            self.on_filter_key(key);
+            return None;
+        }
+
         match key.code {
             KeyCode::Char('c') if ctrl => return Some(Outcome::Cancelled),
             KeyCode::Tab | KeyCode::BackTab => {
@@ -473,9 +517,52 @@ impl State {
         }
     }
 
+    /// Keys while the filter box is open. Esc and Enter close it but keep the
+    /// results on screen.
+    fn on_filter_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => self.filtering = false,
+            KeyCode::Up => self.move_by(-1),
+            KeyCode::Down => self.move_by(1),
+            KeyCode::PageUp => self.move_by(-(self.page as isize)),
+            KeyCode::PageDown => self.move_by(self.page as isize),
+            KeyCode::Home => self.cursor = 0,
+            KeyCode::End => self.cursor = self.entries.len().saturating_sub(1),
+            KeyCode::Backspace => {
+                if self.filter.pop().is_some() {
+                    self.apply_filter(None);
+                }
+            }
+            KeyCode::Char('u') if ctrl => {
+                if !self.filter.is_empty() {
+                    self.filter.clear();
+                    self.apply_filter(None);
+                }
+            }
+            KeyCode::Char(c)
+                if !ctrl && !c.is_control() && self.filter.chars().count() < FILTER_MAX_CHARS =>
+            {
+                self.filter.push(c);
+                self.apply_filter(None);
+            }
+            _ => {}
+        }
+    }
+
     fn on_key_nav(&mut self, key: KeyEvent) -> Option<Outcome> {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => return Some(Outcome::Cancelled),
+            KeyCode::Char('q') => return Some(Outcome::Cancelled),
+            // Esc first clears a filter left on the list; with none, it cancels.
+            KeyCode::Esc => {
+                if self.filter.is_empty() {
+                    return Some(Outcome::Cancelled);
+                }
+                let focus = self.entries.get(self.cursor).map(|e| e.path.clone());
+                self.filter.clear();
+                self.apply_filter(focus.as_deref());
+            }
+            KeyCode::Char('/') => self.filtering = true,
 
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
@@ -489,7 +576,7 @@ impl State {
 
             KeyCode::Char(' ') => return self.select(),
 
-            KeyCode::Char('b') => self.bookmark_current(),
+            KeyCode::Char('b') => self.bookmark_highlighted(),
             KeyCode::Char('.') => self.toggle_hidden(),
             KeyCode::Char('~') => self.go_home(),
             _ => {}
@@ -667,18 +754,23 @@ impl State {
         }
 
         // ---- right: navigation
-        let (title, count) = match &self.loc {
+        let (title, count, total) = match &self.loc {
             Location::Dir(p) => (
                 p.display().to_string(),
                 self.entries.len().saturating_sub(1),
+                self.all.len().saturating_sub(1),
             ),
-            Location::Drives => ("Drives".to_string(), self.entries.len()),
+            Location::Drives => ("Drives".to_string(), self.entries.len(), self.all.len()),
         };
-        let sub = format!(
-            "{count} item{}  ·  hidden: {}",
-            if count == 1 { "" } else { "s" },
-            if self.show_hidden { "shown" } else { "off" }
-        );
+        let hidden = if self.show_hidden { "shown" } else { "off" };
+        let sub = if self.filter.is_empty() {
+            format!(
+                "{count} item{}  ·  hidden: {hidden}",
+                if count == 1 { "" } else { "s" }
+            )
+        } else {
+            format!("{count} of {total}  ·  hidden: {hidden}")
+        };
         put(
             out,
             rx,
@@ -709,6 +801,9 @@ impl State {
             };
             put(out, rx, row + 2, &line, look)?;
         }
+        if !self.filter.is_empty() && count == 0 {
+            put(out, rx, 3, &fit("  (no matches)", rw), Look::Dim)?;
+        }
 
         // ---- footer
         if let Some(input) = &self.input {
@@ -718,14 +813,23 @@ impl State {
                 input.buf
             );
             put(out, 0, h.saturating_sub(2), &fit_left(&prompt, w), Look::Accent)?;
+        } else if self.filtering {
+            let prompt = format!("/{}_", self.filter);
+            put(out, 0, h.saturating_sub(2), &fit_left(&prompt, w), Look::Accent)?;
         } else if let Some(n) = &self.notice {
             put(out, 0, h.saturating_sub(2), &fit(n, w), Look::Notice)?;
+        } else if !self.filter.is_empty() {
+            let line = format!("filter: {}   (/ edit   esc clear)", self.filter);
+            put(out, 0, h.saturating_sub(2), &fit(&line, w), Look::Accent)?;
         }
 
         let help = match (self.input.is_some(), self.mode, self.grabbed.is_some()) {
             (true, _, _) => "enter save   esc cancel   (empty = use the folder's name)",
+            (_, Mode::Nav, _) if self.filtering => {
+                "type to filter   ↑↓ move   enter/esc done (results stay)   ctrl-u clear"
+            }
             (_, Mode::Nav, _) => {
-                "↑↓←→ move   space select   b bookmark   1-9 jump   tab favourites   . hidden   esc cancel"
+                "↑↓←→ move   space select   / filter   b bookmark   1-9 jump   tab favs   . hidden   esc cancel"
             }
             (_, Mode::Favs, false) => {
                 "↑↓ move   space pick up   r rename   x remove   enter open   tab done   esc back"
@@ -840,6 +944,7 @@ fn fit_left(s: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("cdx-ui-{}-{tag}", std::process::id()));
@@ -869,12 +974,6 @@ mod tests {
         }
     }
 
-    fn type_text(s: &mut State, text: &str) {
-        for c in text.chars() {
-            press(s, &[KeyCode::Char(c)]);
-        }
-    }
-
     fn here(s: &State) -> PathBuf {
         s.current_dir().expect("in a folder").to_path_buf()
     }
@@ -892,12 +991,155 @@ mod tests {
     }
 
     #[test]
-    fn b_bookmarks_the_current_folder_and_saves_it() {
+    fn b_on_the_dot_row_bookmarks_the_current_folder_and_saves_it() {
         let (mut s, root, store) = setup("bm", &[]);
-        press(&mut s, &[KeyCode::Char('b')]);
+        press(&mut s, &[KeyCode::Char('b')]); // empty folder: the cursor is on "."
         assert_eq!(s.favs.len(), 1);
         assert_eq!(s.favs[0].path, root);
         assert_eq!(favorites::load_from(&store).unwrap().len(), 1);
+    }
+
+    fn labels(s: &State) -> Vec<String> {
+        s.entries.iter().map(|e| e.label.clone()).collect()
+    }
+
+    fn type_text(s: &mut State, text: &str) {
+        for c in text.chars() {
+            press(s, &[KeyCode::Char(c)]);
+        }
+    }
+
+    fn filter_setup(tag: &str) -> (State, PathBuf) {
+        let (mut s, root, _store) = setup(tag, &[]);
+        for n in ["alpha", "alpine", "beta", "Gamma"] {
+            fs::create_dir(root.join(n)).unwrap();
+        }
+        s.reload(None);
+        (s, root)
+    }
+
+    #[test]
+    fn slash_filters_as_you_type() {
+        let (mut s, _root) = filter_setup("flt1");
+        assert_eq!(labels(&s), [".", "alpha", "alpine", "beta", "Gamma"]);
+        press(&mut s, &[KeyCode::Char('/')]);
+        assert!(s.filtering);
+        type_text(&mut s, "al");
+        assert_eq!(labels(&s), [".", "alpha", "alpine"]);
+        assert_eq!(s.cursor, 1, "cursor lands on the first match");
+        type_text(&mut s, "p");
+        type_text(&mut s, "i");
+        assert_eq!(labels(&s), [".", "alpine"]);
+        press(&mut s, &[KeyCode::Backspace]);
+        assert_eq!(labels(&s), [".", "alpha", "alpine"], "backspace widens it again");
+    }
+
+    #[test]
+    fn the_filter_ignores_case() {
+        let (mut s, _root) = filter_setup("flt2");
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "GAM");
+        assert_eq!(labels(&s), [".", "Gamma"]);
+    }
+
+    #[test]
+    fn esc_closes_filter_mode_but_leaves_the_results_filtered() {
+        let (mut s, _root) = filter_setup("flt3");
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "al");
+        let out = s.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(out.is_none(), "Esc in filter mode never cancels cdx");
+        assert!(!s.filtering);
+        assert_eq!(labels(&s), [".", "alpha", "alpine"]);
+        // Normal keys work on the filtered list again.
+        press(&mut s, &[KeyCode::Char('j')]);
+        assert_eq!(s.entries[s.cursor].label, "alpine");
+    }
+
+    #[test]
+    fn enter_also_closes_filter_mode_keeping_results() {
+        let (mut s, _root) = filter_setup("flt4");
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "be");
+        press(&mut s, &[KeyCode::Enter]);
+        assert!(!s.filtering);
+        assert_eq!(labels(&s), [".", "beta"]);
+    }
+
+    #[test]
+    fn esc_in_navigation_clears_a_left_over_filter_before_cancelling() {
+        let (mut s, _root) = filter_setup("flt5");
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "al");
+        press(&mut s, &[KeyCode::Esc]); // close filter mode
+        let out = s.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(out.is_none(), "this Esc only clears the filter");
+        assert!(s.filter.is_empty());
+        assert_eq!(labels(&s).len(), 5);
+        assert_eq!(s.entries[s.cursor].label, "alpha", "cursor stays on the same folder");
+        let out = s.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(out, Some(Outcome::Cancelled)));
+    }
+
+    #[test]
+    fn shortcut_keys_are_just_text_while_filtering() {
+        let (mut s, _root) = filter_setup("flt6");
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "b1q.~j");
+        assert!(s.filtering);
+        assert!(s.favs.is_empty(), "b did not bookmark");
+        assert_eq!(s.mode, Mode::Nav);
+        assert_eq!(s.filter, "b1q.~j");
+        assert!(!s.show_hidden);
+        assert_eq!(labels(&s), ["."], "nothing matches, only the . row remains");
+    }
+
+    #[test]
+    fn arrows_move_through_the_matches_while_typing() {
+        let (mut s, _root) = filter_setup("flt7");
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "al");
+        press(&mut s, &[KeyCode::Down]);
+        assert_eq!(s.entries[s.cursor].label, "alpine");
+        assert!(s.filtering);
+    }
+
+    #[test]
+    fn moving_to_another_folder_drops_the_filter() {
+        let (mut s, root) = filter_setup("flt8");
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "al");
+        press(&mut s, &[KeyCode::Enter, KeyCode::Enter]); // close box, open "alpha"
+        assert_eq!(here(&s), root.join("alpha"));
+        assert!(s.filter.is_empty());
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "zz");
+        press(&mut s, &[KeyCode::Enter, KeyCode::Left]);
+        assert_eq!(here(&s), root);
+        assert_eq!(labels(&s).len(), 5, "going up shows the whole folder");
+    }
+
+    #[test]
+    fn toggling_hidden_keeps_the_filter() {
+        let (mut s, root) = filter_setup("flt9");
+        fs::create_dir(root.join(".alhidden")).unwrap();
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "al");
+        press(&mut s, &[KeyCode::Enter, KeyCode::Char('.')]);
+        assert_eq!(labels(&s), [".", ".alhidden", "alpha", "alpine"]);
+    }
+
+    #[test]
+    fn b_bookmarks_the_highlighted_folder_not_the_one_we_are_in() {
+        let (mut s, root, store) = setup("bmhl", &[]);
+        fs::create_dir(root.join("alpha")).unwrap();
+        fs::create_dir(root.join("beta")).unwrap();
+        s.reload(None); // lands on the first real folder, "alpha"
+        press(&mut s, &[KeyCode::Down, KeyCode::Char('b')]);
+        assert_eq!(s.favs.len(), 1);
+        assert_eq!(s.favs[0].path, root.join("beta"));
+        assert_eq!(here(&s), root, "we did not navigate");
+        assert_eq!(on_disk(&store), ["beta"]);
     }
 
     #[test]
@@ -913,7 +1155,7 @@ mod tests {
         let names: Vec<String> = (0..9).map(|i| format!("f{i}")).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         let (mut s, _root, _store) = setup("full", &refs);
-        press(&mut s, &[KeyCode::Char('b')]);
+        press(&mut s, &[KeyCode::Char('g'), KeyCode::Char('b')]); // "." is not a favourite yet
         assert_eq!(s.favs.len(), 9);
         assert!(s.notice.as_deref().unwrap().contains("full"));
     }

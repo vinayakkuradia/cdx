@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 /// Files are ignored; symlinks that point at folders are included.
 pub fn list_subdirs(dir: &Path, show_hidden: bool) -> io::Result<Vec<(String, PathBuf)>> {
     let mut out = Vec::new();
-    for entry in fs::read_dir(dir)? {
+    for entry in read_dir(dir)? {
         let Ok(entry) = entry else { continue };
         let path = entry.path();
         // `fs::metadata` follows symlinks, so linked folders count as folders.
@@ -24,6 +24,71 @@ pub fn list_subdirs(dir: &Path, show_hidden: bool) -> io::Result<Vec<(String, Pa
     }
     out.sort_by_cached_key(|(name, _)| name.to_lowercase());
     Ok(out)
+}
+
+/// `fs::read_dir`, with a second chance on macOS.
+///
+/// macOS blocks terminals from Desktop, Documents, Downloads and external
+/// volumes until the user allows it, and after a "Don't Allow" it never asks
+/// again by itself. If that is why we were refused, we clear the stored answer
+/// for this terminal and folder and try once more, which makes macOS show its
+/// prompt again. If the user declines again (or on Linux and Windows, which have
+/// no such prompt) the original error is returned unchanged.
+pub fn read_dir(path: &Path) -> io::Result<fs::ReadDir> {
+    match fs::read_dir(path) {
+        Err(e) if ask_again(path, &e) => fs::read_dir(path),
+        other => other,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ask_again(path: &Path, err: &io::Error) -> bool {
+    use std::process::{Command, Stdio};
+    // "Operation not permitted" (EPERM) is how a privacy denial looks;
+    // ordinary file permissions give "Permission denied" (EACCES) instead.
+    if err.raw_os_error() != Some(1) {
+        return false;
+    }
+    let Some(service) = tcc_service(path, home_dir().as_deref()) else {
+        return false;
+    };
+    // macOS sets this to the app the terminal belongs to (Terminal, iTerm2, ...).
+    let Some(app) = std::env::var("__CFBundleIdentifier").ok().filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    Command::new("tccutil")
+        .args(["reset", service, &app])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ask_again(_path: &Path, _err: &io::Error) -> bool {
+    false
+}
+
+/// The macOS privacy category that guards `path`, if it is one we can re-prompt for.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn tcc_service(path: &Path, home: Option<&Path>) -> Option<&'static str> {
+    if let Some(h) = home {
+        for (dir, service) in [
+            ("Desktop", "SystemPolicyDesktopFolder"),
+            ("Documents", "SystemPolicyDocumentsFolder"),
+            ("Downloads", "SystemPolicyDownloadsFolder"),
+        ] {
+            if path.starts_with(h.join(dir)) {
+                return Some(service);
+            }
+        }
+    }
+    if path.starts_with("/Volumes") {
+        return Some("SystemPolicyRemovableVolumes");
+    }
+    None
 }
 
 #[cfg(unix)]
@@ -130,6 +195,19 @@ mod tests {
         assert_eq!(names(false), vec!["alpha", "Beta"]);
         assert_eq!(names(true), vec![".secret", "alpha", "Beta"]);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn privacy_prompts_apply_to_protected_folders_only() {
+        let home = Path::new("/Users/me");
+        let svc = |p: &str| tcc_service(Path::new(p), Some(home));
+        assert_eq!(svc("/Users/me/Documents"), Some("SystemPolicyDocumentsFolder"));
+        assert_eq!(svc("/Users/me/Desktop/x/y"), Some("SystemPolicyDesktopFolder"));
+        assert_eq!(svc("/Users/me/Downloads"), Some("SystemPolicyDownloadsFolder"));
+        assert_eq!(svc("/Volumes/USB"), Some("SystemPolicyRemovableVolumes"));
+        assert_eq!(svc("/Users/me/projects"), None);
+        assert_eq!(svc("/Users/me/DocumentsOld"), None);
+        assert_eq!(tcc_service(Path::new("/tmp"), None), None);
     }
 
     #[test]

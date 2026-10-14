@@ -60,26 +60,35 @@ pub fn is_storable(path: &Path) -> bool {
 
 // ----------------------------------------------------------------- locations
 
+/// `~/.cdx` on macOS/Linux, `%USERPROFILE%\.cdx` on Windows (or `CDX_CONFIG_DIR`).
 pub fn config_dir() -> Option<PathBuf> {
     if let Some(dir) = non_empty(env::var_os("CDX_CONFIG_DIR")) {
         return Some(PathBuf::from(dir));
     }
-    platform_config_dir()
+    home().map(|h| h.join(".cdx"))
 }
 
-#[cfg(windows)]
-fn platform_config_dir() -> Option<PathBuf> {
-    non_empty(env::var_os("APPDATA")).map(|a| PathBuf::from(a).join("cdx"))
+fn home() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let var = "USERPROFILE";
+    #[cfg(not(windows))]
+    let var = "HOME";
+    non_empty(env::var_os(var)).map(PathBuf::from)
 }
 
-#[cfg(not(windows))]
-fn platform_config_dir() -> Option<PathBuf> {
-    if let Some(x) = non_empty(env::var_os("XDG_CONFIG_HOME")).map(PathBuf::from) {
-        if x.is_absolute() {
-            return Some(x.join("cdx"));
-        }
+/// Where versions before the `~/.cdx` move kept the list (read once, never written).
+fn legacy_file_path() -> Option<PathBuf> {
+    if non_empty(env::var_os("CDX_CONFIG_DIR")).is_some() {
+        return None;
     }
-    non_empty(env::var_os("HOME")).map(|h| PathBuf::from(h).join(".config").join("cdx"))
+    #[cfg(windows)]
+    let dir = non_empty(env::var_os("APPDATA")).map(|a| PathBuf::from(a).join("cdx"));
+    #[cfg(not(windows))]
+    let dir = match non_empty(env::var_os("XDG_CONFIG_HOME")).map(PathBuf::from) {
+        Some(x) if x.is_absolute() => Some(x.join("cdx")),
+        _ => home().map(|h| h.join(".config").join("cdx")),
+    };
+    dir.map(|d| d.join("favorites.tsv"))
 }
 
 fn non_empty(v: Option<OsString>) -> Option<OsString> {
@@ -93,10 +102,17 @@ pub fn file_path() -> Option<PathBuf> {
 // ------------------------------------------------------------ load and save
 
 pub fn load() -> io::Result<Vec<Favorite>> {
-    match file_path() {
-        Some(p) => load_from(&p),
-        None => Ok(Vec::new()),
+    let Some(p) = file_path() else {
+        return Ok(Vec::new());
+    };
+    // First run after the move to ~/.cdx: pick up the old list so nothing is lost.
+    // The next save writes it to the new place; the old file is left alone.
+    if !p.exists() {
+        if let Some(old) = legacy_file_path().filter(|o| o.is_file()) {
+            return load_from(&old);
+        }
     }
+    load_from(&p)
 }
 
 /// A missing file simply means "no favourites yet".

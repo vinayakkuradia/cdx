@@ -6,11 +6,14 @@ Type `cdx`, browse, press **Space**, and your shell is now in that folder.
 - Windows, macOS, Linux
 - Single native binary (~0.5 MB), no runtime, no background service, no GUI
 - Hidden folders stay out of the way unless you ask: `cdx -h`
-- Up to nine **favourites**, one keypress away: `b` to bookmark, `1`-`9` to jump
+- Up to nine **favourites**, one keypress away: `b` to bookmark the highlighted folder, `1`-`9` to jump
+- **Speed dial** from the shell: `cdx 1` or `cdx work` goes straight to a favourite
+- **Filter** as you type: press `/`
+- `cdx -n` opens the folder in a **new terminal window** instead
 
 ## Install
 
-Replace `vinayakkuradia/cdx` with this project's GitHub cdxsitory.
+Replace `vinayakkuradia/cdx` with this project's GitHub repository.
 
 **macOS / Linux**
 ```sh
@@ -86,6 +89,10 @@ The installers do this for you. (Markers `# >>> cdx >>>` ... `# <<< cdx <<<` del
 cdx            browse from the current folder
 cdx -h         ...with hidden folders shown
 cdx <path>     browse starting at <path>
+cdx 1          speed dial: cd to favourite #1 (1-9), no browser
+cdx work       speed dial by name or alias (case-insensitive)
+cdx -n         browse, then open the chosen folder in a new terminal window
+cdx -n 2       open favourite #2 in a new terminal window
 cdx --help     full help
 ```
 
@@ -99,10 +106,48 @@ cdx --help     full help
 | `.`                        | toggle hidden folders               |
 | `~`                        | jump to your home folder            |
 | PageUp / PageDown, `g` / `G` | page, top, bottom                 |
+| `/`                        | filter the list (see below)         |
 | `b`, `1`-`9`, `Tab`        | favourites (see below)              |
 | Esc / `q` / Ctrl-C         | cancel, you stay where you were     |
 
 "Hidden" means dot-folders on macOS/Linux and the Hidden attribute on Windows.
+
+## Filtering
+
+Press `/` and start typing: the list narrows to folders whose name contains what you
+typed (case-insensitive). The `.` row stays so you can still select the current folder.
+
+| Key (filter box open) | Action |
+|-----------------------|--------|
+| any character         | add to the filter (`b`, `1`-`9`, `q` etc. are just letters here) |
+| Backspace / Ctrl-U    | delete a character / clear the box |
+| ↑ ↓ / PageUp / PageDown | move through the matches |
+| Esc / Enter           | close the box; **the list stays filtered** |
+| Ctrl-C                | quit cdx |
+
+After the box is closed, the normal keys work on the filtered list. `/` edits the filter
+again; Esc (with the box closed) clears it, and a second Esc cancels cdx as usual.
+Opening another folder, going up, `~` and the `1`-`9` jumps also clear the filter;
+toggling hidden folders keeps it.
+
+## Speed dial and new windows
+
+`cdx 1` ... `cdx 9` change to the folder in that favourite slot, without opening the
+browser. `cdx <name>` does the same for the favourite whose alias (or folder name, when
+it has no alias) matches, ignoring case. Names with a slash, a drive colon or a leading
+`.`/`~` are always treated as paths, and a word that is not a favourite still works as a
+folder in the current directory. If there is no such favourite, or its folder was
+deleted, cdx prints an error and exits with code 2, so your shell stays put.
+(`init` is reserved for `cdx init <shell>`.)
+
+`-n` / `--new-window` works with the browser and with speed dial. The chosen folder opens
+in a new window and your current shell does not move.
+
+| OS | Opens |
+|----|-------|
+| macOS | Terminal (or iTerm2 when you are in it) via `open -a` |
+| Windows | Windows Terminal (`wt`) if installed, otherwise a `cmd` window |
+| Linux/BSD | the first installed of gnome-terminal, konsole, xfce4-terminal, mate-terminal, tilix, terminator, lxterminal, kitty, alacritty, wezterm, foot, x-terminal-emulator, xterm (needs a graphical session) |
 
 ## Favourites
 
@@ -119,7 +164,7 @@ Favourites          │ /home/me/projects
 
 | Key (navigation mode)  | Action |
 |------------------------|--------|
-| `b`                    | bookmark the folder you are in (the `●` marks the one you are standing in) |
+| `b`                    | bookmark the highlighted folder; the `●` marks the favourite you are standing in |
 | `1` - `9`              | jump straight to that favourite (you stay in the browser; press Space to select) |
 | `Tab`                  | switch to the favourites panel to edit them |
 
@@ -146,9 +191,24 @@ Notes:
 - The panel needs a window at least 48 columns wide. Narrower than that it hides itself,
   though the `1`-`9` keys keep working.
 - Stored as plain text, one line per favourite (`alias<TAB>path`), at
-  `~/.config/cdx/favorites.tsv` (macOS/Linux, honouring `XDG_CONFIG_HOME`) or
-  `%APPDATA%\cdx\favorites.tsv` (Windows). Set `CDX_CONFIG_DIR` to use another folder.
-  Safe to edit by hand or keep in your dotfiles.
+  `~/.cdx/favorites.tsv` (macOS/Linux) or `%USERPROFILE%\.cdx\favorites.tsv` (Windows).
+  Set `CDX_CONFIG_DIR` to use another folder. Safe to edit by hand or keep in your dotfiles.
+- Upgrading: if there is no `~/.cdx/favorites.tsv` yet, the list from the old location
+  (`~/.config/cdx/` or `%APPDATA%\cdx\`) is read once and saved to the new one. The old
+  file is left in place; delete it when you like.
+
+## Permissions
+
+Some folders are protected by the operating system.
+
+- **macOS** guards Desktop, Documents, Downloads and external volumes behind a privacy
+  prompt for your terminal app. If you said "Don't Allow" earlier and later open one of those
+  folders again, cdx clears that stored answer for the folder and retries once, so macOS
+  asks you again. Decline again and you see the usual `Operation not permitted` error.
+  (This needs the terminal to be a normal macOS app; other protected places, such as
+  `~/Library`, need *Full Disk Access* in System Settings instead.)
+- **Linux and Windows** have no such prompt, so a folder you cannot read shows the system's
+  error message, as before.
 
 ## How it works
 
@@ -156,7 +216,7 @@ A program cannot change its parent shell's working directory; the OS forbids it.
 So the project ships two parts:
 
 1. **`cdx-bin`**, the native binary. It draws its UI on **stderr** and prints
-   only the chosen path to **stdout**. Cancelling prints nothing (exit code 1).
+   only the chosen path to **stdout**. Cancelling prints nothing and exits with code 0, since it is a normal outcome.
 2. **A tiny shell function named `cdx`** (from `cdx-bin init <shell>`) that
    runs the binary and `cd`s to whatever it printed. `cdx init`, `--help`
    and `--version` pass straight through.
@@ -192,7 +252,7 @@ cargo build --release    # LTO + strip, around 0.5 MB
 1. Bump `version` in `Cargo.toml`, run `cargo build` (updates `Cargo.lock`), commit and push.
 2. Tag and push: `git tag v0.1.1 && git push origin v0.1.1`
 3. The **release** workflow builds six targets, packages them with checksums, stamps your
-   cdxsitory into `install.sh` / `install.ps1`, and publishes a GitHub release.
+   repository into `install.sh` / `install.ps1`, and publishes a GitHub release.
    It refuses to run if the tag does not match the version in `Cargo.toml`.
 
 Each release contains `cdx-<target>.tar.gz` / `.zip`, a matching `.sha256`, and the two installers.
