@@ -1,4 +1,5 @@
 mod browser;
+mod config;
 mod favorites;
 mod fsutil;
 mod init;
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use browser::Outcome;
+use config::Config;
 use favorites::Favorite;
 
 fn help() -> String {
@@ -21,6 +23,7 @@ USAGE:
     cdx [-n] <N|NAME>      speed dial: go straight to favourite N (1-9), or to the
                            favourite whose name or alias is NAME (no browser)
     cdx init <SHELL>       print the shell integration ({shells})
+    cdx config <WHAT>      init (write a commented config.ini), path, show, check
 
 OPTIONS:
     -h, --hidden           show hidden folders
@@ -29,7 +32,7 @@ OPTIONS:
         --help             show this help
     -V, --version          show version
 
-KEYS:
+KEYS (the defaults; every one can be changed in config.ini):
     Up/Down or j/k         move            PageUp/PageDown   jump a page
     Right/l/Enter          open folder     Left/h/Backspace  go up
     Space                  select folder and cd there
@@ -47,7 +50,8 @@ FAVOURITES (shown on the left, up to nine):
         1-9                while holding: send the item to that slot
         r                  rename (set an alias; empty = folder name)
         x                  remove          Enter  open it    Esc  undo / back
-    stored in: {favfile}
+    files live in: {datadir}
+    (config.ini = settings and key bindings, favorites.tsv = your favourites)
 
 SETUP:
     bash/zsh    eval \"$(cdx-bin init bash)\"        in ~/.bashrc or ~/.zshrc
@@ -57,9 +61,9 @@ SETUP:
 ",
         version = env!("CARGO_PKG_VERSION"),
         shells = init::SHELLS,
-        favfile = favorites::file_path()
+        datadir = config::data_dir_from_env()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(no config folder found)".into()),
+            .unwrap_or_else(|| "(no home folder found)".into()),
     )
 }
 
@@ -139,11 +143,12 @@ fn resolve(arg: &str, favs: &[Favorite]) -> Result<Start, String> {
     }
 }
 
-/// Hand the chosen folder over: print it for the shell wrapper, or open a window.
-fn deliver(path: &Path, new_window: bool) -> ExitCode {
-    if new_window {
+/// Hand the chosen folder over: print it for the shell wrapper, or (`new_window` is
+/// `Some(custom command)`) open a new terminal window.
+fn deliver(path: &Path, new_window: Option<Option<&str>>) -> ExitCode {
+    if let Some(command) = new_window {
         // Nothing goes to stdout, so the wrapper leaves this shell where it is.
-        return match newwin::open(path) {
+        return match newwin::open(path, command) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("cdx: could not open a new terminal window: {e}");
@@ -165,6 +170,71 @@ fn deliver(path: &Path, new_window: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `cdx-bin config <init|path|show|check>`.
+fn config_command(sub: Option<String>, extra: Option<String>) -> ExitCode {
+    match sub.as_deref() {
+        Some("init") => {
+            let force = extra.as_deref() == Some("--force");
+            match Config::write_default_file(force) {
+                Ok((path, true)) => {
+                    println!("wrote {}", path.display());
+                    ExitCode::SUCCESS
+                }
+                Ok((path, false)) => {
+                    eprintln!(
+                        "cdx: {} already exists; left untouched (use `config init --force` to replace it)",
+                        path.display()
+                    );
+                    ExitCode::from(1)
+                }
+                Err(e) => {
+                    eprintln!("cdx: could not write the config file: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        Some("path") => match Config::load().0.config_path() {
+            Some(p) => {
+                println!("{}", p.display());
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!("cdx: cannot find your home folder");
+                ExitCode::from(2)
+            }
+        },
+        Some("show") => {
+            let (cfg, warns) = Config::load();
+            for w in &warns {
+                eprintln!("cdx: {w}");
+            }
+            print!("{}", cfg.to_ini());
+            ExitCode::SUCCESS
+        }
+        Some("check") => {
+            let (cfg, warns) = Config::load();
+            let place = cfg
+                .config_path()
+                .filter(|p| p.is_file())
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "no config.ini, using the defaults".into());
+            if warns.is_empty() {
+                println!("config OK ({place})");
+                ExitCode::SUCCESS
+            } else {
+                for w in &warns {
+                    eprintln!("cdx: {w}");
+                }
+                ExitCode::from(1)
+            }
+        }
+        _ => {
+            eprintln!("cdx: usage: cdx config <init [--force]|path|show|check>");
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let mut show_hidden = false;
     let mut new_window = false;
@@ -183,6 +253,7 @@ fn main() -> ExitCode {
                 println!("cdx {}", env!("CARGO_PKG_VERSION"));
                 return ExitCode::SUCCESS;
             }
+            "config" => return config_command(args.next(), args.next()),
             "init" => {
                 return match args.next() {
                     Some(shell) => init::run(&shell),
@@ -200,6 +271,17 @@ fn main() -> ExitCode {
         }
     }
 
+    let (mut cfg, mut warnings) = Config::load();
+    if let Err(e) = cfg.migrate_legacy_favorites() {
+        warnings.push(format!("could not copy your old favourites to the new place: {e}"));
+    }
+    for w in &warnings {
+        eprintln!("cdx: {w}");
+    }
+    fsutil::set_ask_again(cfg.macos_ask_again);
+    // The -h flag adds to the config; it cannot switch hidden folders off.
+    cfg.ui.show_hidden |= show_hidden;
+
     let start = match target {
         None => match env::current_dir() {
             Ok(p) => Start::Browse(p),
@@ -209,7 +291,11 @@ fn main() -> ExitCode {
             }
         },
         Some(arg) if is_dial_candidate(&arg) => {
-            let favs = match favorites::load() {
+            let loaded = match cfg.favorites_path() {
+                Some(p) => favorites::load_from(&p),
+                None => Ok(Vec::new()),
+            };
+            let favs = match loaded {
                 Ok(f) => f,
                 // A broken favourites file only matters if a number was typed.
                 Err(e) if dial_slot(&arg).is_some() => {
@@ -243,7 +329,14 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            match browser::run(start, show_hidden) {
+            let notice = (!warnings.is_empty()).then(|| {
+                format!(
+                    "config: {} problem{} (listed in your terminal after you leave; or run `cdx-bin config check`)",
+                    warnings.len(),
+                    if warnings.len() == 1 { "" } else { "s" }
+                )
+            });
+            match browser::run(start, cfg.clone(), notice) {
                 Ok(Outcome::Selected(path)) => path,
                 // Cancelled is a normal, intended outcome: print nothing (so the
                 // wrapper leaves you where you are) and exit successfully.
@@ -255,7 +348,10 @@ fn main() -> ExitCode {
             }
         }
     };
-    deliver(&chosen, new_window)
+    deliver(
+        &chosen,
+        new_window.then(|| cfg.new_window_command.as_deref()),
+    )
 }
 
 #[cfg(test)]

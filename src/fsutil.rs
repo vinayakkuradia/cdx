@@ -3,6 +3,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// List the sub-folders of `dir`, sorted case-insensitively.
 /// Files are ignored; symlinks that point at folders are included.
@@ -36,9 +37,16 @@ pub fn list_subdirs(dir: &Path, show_hidden: bool) -> io::Result<Vec<(String, Pa
 /// no such prompt) the original error is returned unchanged.
 pub fn read_dir(path: &Path) -> io::Result<fs::ReadDir> {
     match fs::read_dir(path) {
-        Err(e) if ask_again(path, &e) => fs::read_dir(path),
+        Err(e) if ASK_AGAIN.load(Ordering::Relaxed) && ask_again(path, &e) => fs::read_dir(path),
         other => other,
     }
+}
+
+static ASK_AGAIN: AtomicBool = AtomicBool::new(true);
+
+/// The `macos_ask_again` setting; on by default, ignored outside macOS.
+pub fn set_ask_again(on: bool) {
+    ASK_AGAIN.store(on, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "macos")]

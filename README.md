@@ -96,7 +96,7 @@ cdx -n 2       open favourite #2 in a new terminal window
 cdx --help     full help
 ```
 
-| Key                        | Action                              |
+| Default key                | Action                              |
 |----------------------------|-------------------------------------|
 | ↑ ↓ / `k` `j`              | move                                |
 | → / `l` / Enter            | open the highlighted folder         |
@@ -111,6 +111,9 @@ cdx --help     full help
 | Esc / `q` / Ctrl-C         | cancel, you stay where you were     |
 
 "Hidden" means dot-folders on macOS/Linux and the Hidden attribute on Windows.
+
+Every key above can be rebound (see [Configuration](#configuration)). Only `1`-`9`
+(favourites) and Ctrl-C (quit) are fixed.
 
 ## Filtering
 
@@ -164,7 +167,7 @@ Favourites          │ /home/me/projects
 
 | Key (navigation mode)  | Action |
 |------------------------|--------|
-| `b`                    | bookmark the highlighted folder; the `●` marks the favourite you are standing in |
+| `b`                    | bookmark the highlighted folder (on the `.` row, the folder you are in); the `●` marks the favourite you are standing in |
 | `1` - `9`              | jump straight to that favourite (you stay in the browser; press Space to select) |
 | `Tab`                  | switch to the favourites panel to edit them |
 
@@ -188,14 +191,104 @@ Notes:
   (or leave the browser, however you leave it).
 - A favourite whose folder has been deleted is shown in red with `✗`; its key explains
   rather than failing. Remove it with `x`.
-- The panel needs a window at least 48 columns wide. Narrower than that it hides itself,
-  though the `1`-`9` keys keep working.
+- The panel needs a window at least 48 columns wide (configurable). Narrower than that it
+  hides itself, though the `1`-`9` keys keep working.
 - Stored as plain text, one line per favourite (`alias<TAB>path`), at
   `~/.cdx/favorites.tsv` (macOS/Linux) or `%USERPROFILE%\.cdx\favorites.tsv` (Windows).
   Set `CDX_CONFIG_DIR` to use another folder. Safe to edit by hand or keep in your dotfiles.
 - Upgrading: if there is no `~/.cdx/favorites.tsv` yet, the list from the old location
   (`~/.config/cdx/` or `%APPDATA%\cdx\`) is read once and saved to the new one. The old
   file is left in place; delete it when you like.
+
+## Configuration
+
+Everything lives in one folder: `~/.cdx` (macOS/Linux) or `%USERPROFILE%\.cdx` (Windows),
+or wherever `CDX_CONFIG_DIR` points. It holds `favorites.tsv` and, if you want one,
+`config.ini`. Nothing is required: without a config file you get the defaults.
+
+```
+cdx-bin config init      write a fully commented config.ini to start from
+cdx-bin config path      print where it is
+cdx-bin config show      print the settings in effect
+cdx-bin config check     report mistakes in the file (exit code 1 if any)
+```
+
+(`cdx config ...` works too once the shell integration is set up; a folder literally
+named `config` can be opened with `cdx ./config`. The same goes for `init`.)
+
+The file is a plain ini file. Lines starting with `#` or `;` are comments, and deleting a
+line brings back its default. A mistake never stops cdx: the bad line is ignored, cdx
+prints what was wrong in your terminal, and shows a one-line note on the first screen.
+
+```ini
+[paths]
+# relative to the cdx folder, or absolute
+favorites_file = favorites.tsv
+
+[ui]
+# same as always passing -h
+show_hidden = false
+filter_case_sensitive = false
+# narrower windows hide the favourites panel
+min_width_for_favorites = 48
+max_alias_len = 40
+
+[permissions]
+# see "Permissions" below
+macos_ask_again = true
+
+[new_window]
+# what `cdx -n` runs; empty or missing = built-in choice
+command = kitty --directory {path}
+
+[keys]
+# while browsing
+bookmark = b B
+filter = /
+parent = left h backspace
+
+[keys.favorites]
+# while editing favourites
+remove = x delete
+```
+
+Comments must be on their own lines; a `#` after a value is part of the value.
+
+**Key bindings.** One line per action, several keys separated by spaces, an empty value
+unbinds the action. Names: single characters (`k`, `G`, `/`), `space enter esc tab backtab
+backspace delete insert home end pageup pagedown up down left right f1`-`f12`, with optional
+`ctrl-`, `alt-` and `shift-` prefixes (`ctrl-x`, `alt-left`). Setting an action replaces its
+default keys, so write all the keys you want. The on-screen help line and the hints follow
+whatever you configure.
+
+| Browsing (`[keys]`) | Default | | Favourites (`[keys.favorites]`) | Default |
+|---|---|---|---|---|
+| `move_up` | `up k` | | `move_up` | `up k` |
+| `move_down` | `down j` | | `move_down` | `down j` |
+| `page_up` / `page_down` | `pageup` / `pagedown` | | `pick_up` | `space` |
+| `top` / `bottom` | `home g` / `end G` | | `open` | `enter right l` |
+| `open` | `right l enter` | | `rename` | `r` |
+| `parent` | `left h backspace` | | `remove` | `x delete` |
+| `select` | `space` | | `back` | `esc` |
+| `cancel` | `esc q` | | `cancel` | `q` |
+| `toggle_hidden` | `.` | | `toggle_favorites` | `tab backtab` |
+| `home` | `~` | | | |
+| `bookmark` | `b` | | | |
+| `filter` | `/` | | | |
+| `toggle_favorites` | `tab backtab` | | | |
+
+Not configurable, on purpose: `1`-`9`, Ctrl-C, and the keys inside the filter box and the
+rename box. Two actions on the same key are reported, and the one listed first in the tables
+above wins.
+
+**Precedence.** Command-line flags add to the config (`-h` turns hidden folders on, it
+cannot turn them off). `CDX_CONFIG_DIR` decides where the folder is; it cannot be set in
+the file.
+
+**New-window command.** `{path}` is replaced by the folder, which is also the working
+directory of the new process. Quotes group words and there are no escape characters, so
+Windows paths work as typed. Examples: `open -a Ghostty {path}` (macOS),
+`wezterm start --cwd {path}`, `wt -d "{path}"`.
 
 ## Permissions
 
@@ -204,7 +297,7 @@ Some folders are protected by the operating system.
 - **macOS** guards Desktop, Documents, Downloads and external volumes behind a privacy
   prompt for your terminal app. If you said "Don't Allow" earlier and later open one of those
   folders again, cdx clears that stored answer for the folder and retries once, so macOS
-  asks you again. Decline again and you see the usual `Operation not permitted` error.
+  asks you again (switch this off with `macos_ask_again = false` in `config.ini`). Decline again and you see the usual `Operation not permitted` error.
   (This needs the terminal to be a normal macOS app; other protected places, such as
   `~/Library`, need *Full Disk Access* in System Settings instead.)
 - **Linux and Windows** have no such prompt, so a folder you cannot read shows the system's
@@ -229,7 +322,9 @@ that the shell integration is not active.
 ```
 src/main.rs      argument parsing, exit codes, printing the result
 src/browser.rs   the interactive browser (state, keys, drawing, favourites panel)
+src/config.rs    settings, key bindings, config.ini parsing, data folder paths
 src/favorites.rs favourites: data, file format, load/save
+src/newwin.rs    `cdx -n`: opening a new terminal window
 src/fsutil.rs    folder listing, hidden detection, Windows drives, paths
 src/init.rs      shell wrappers for bash/zsh/fish/PowerShell/cmd
 install.sh       user installer for macOS / Linux (shipped with each release)

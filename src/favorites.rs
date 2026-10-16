@@ -9,8 +9,6 @@
 //!
 //! The alias may be empty, meaning "use the folder's own name".
 
-use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -58,62 +56,7 @@ pub fn is_storable(path: &Path) -> bool {
     }
 }
 
-// ----------------------------------------------------------------- locations
-
-/// `~/.cdx` on macOS/Linux, `%USERPROFILE%\.cdx` on Windows (or `CDX_CONFIG_DIR`).
-pub fn config_dir() -> Option<PathBuf> {
-    if let Some(dir) = non_empty(env::var_os("CDX_CONFIG_DIR")) {
-        return Some(PathBuf::from(dir));
-    }
-    home().map(|h| h.join(".cdx"))
-}
-
-fn home() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let var = "USERPROFILE";
-    #[cfg(not(windows))]
-    let var = "HOME";
-    non_empty(env::var_os(var)).map(PathBuf::from)
-}
-
-/// Where versions before the `~/.cdx` move kept the list (read once, never written).
-fn legacy_file_path() -> Option<PathBuf> {
-    if non_empty(env::var_os("CDX_CONFIG_DIR")).is_some() {
-        return None;
-    }
-    #[cfg(windows)]
-    let dir = non_empty(env::var_os("APPDATA")).map(|a| PathBuf::from(a).join("cdx"));
-    #[cfg(not(windows))]
-    let dir = match non_empty(env::var_os("XDG_CONFIG_HOME")).map(PathBuf::from) {
-        Some(x) if x.is_absolute() => Some(x.join("cdx")),
-        _ => home().map(|h| h.join(".config").join("cdx")),
-    };
-    dir.map(|d| d.join("favorites.tsv"))
-}
-
-fn non_empty(v: Option<OsString>) -> Option<OsString> {
-    v.filter(|s| !s.is_empty())
-}
-
-pub fn file_path() -> Option<PathBuf> {
-    config_dir().map(|d| d.join("favorites.tsv"))
-}
-
 // ------------------------------------------------------------ load and save
-
-pub fn load() -> io::Result<Vec<Favorite>> {
-    let Some(p) = file_path() else {
-        return Ok(Vec::new());
-    };
-    // First run after the move to ~/.cdx: pick up the old list so nothing is lost.
-    // The next save writes it to the new place; the old file is left alone.
-    if !p.exists() {
-        if let Some(old) = legacy_file_path().filter(|o| o.is_file()) {
-            return load_from(&old);
-        }
-    }
-    load_from(&p)
-}
 
 /// A missing file simply means "no favourites yet".
 pub fn load_from(path: &Path) -> io::Result<Vec<Favorite>> {
@@ -187,6 +130,7 @@ pub fn serialize(favs: &[Favorite]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
 
     fn fav(path: &str, alias: Option<&str>) -> Favorite {
         Favorite {

@@ -18,12 +18,9 @@ use crossterm::{
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
+use crate::config::{Action, Config};
 use crate::favorites::{self, Favorite};
 use crate::fsutil;
-
-/// Below this many columns the favourites panel is hidden (the 1-9 keys still work).
-const MIN_WIDTH_FOR_FAVS: usize = 48;
-const ALIAS_MAX_CHARS: usize = 40;
 
 pub enum Outcome {
     Selected(PathBuf),
@@ -69,6 +66,7 @@ struct State {
     // navigation
     loc: Location,
     show_hidden: bool,
+    cfg: Config,
     /// Everything in the folder; `entries` is the part that matches `filter`.
     all: Vec<Entry>,
     entries: Vec<Entry>,
@@ -117,15 +115,16 @@ impl Drop for TermGuard {
     }
 }
 
-pub fn run(start: PathBuf, show_hidden: bool) -> io::Result<Outcome> {
-    let (favs, warning) = match favorites::load() {
-        Ok(f) => (f, None),
-        Err(e) => (Vec::new(), Some(format!("could not read favourites: {e}"))),
+/// Run the browser. `startup_notice` is shown on the first screen (config warnings).
+pub fn run(start: PathBuf, cfg: Config, startup_notice: Option<String>) -> io::Result<Outcome> {
+    let store = cfg.favorites_path();
+    let (favs, warning) = match store.as_deref().map(favorites::load_from) {
+        Some(Ok(f)) => (f, None),
+        Some(Err(e)) => (Vec::new(), Some(format!("could not read favourites: {e}"))),
+        None => (Vec::new(), None),
     };
-    let mut state = State::new(start, show_hidden, favs, favorites::file_path());
-    if warning.is_some() {
-        state.notice = warning;
-    }
+    let mut state = State::new(start, favs, store, cfg);
+    state.notice = warning.or(startup_notice);
 
     let guard = TermGuard::enter()?;
     let mut out = BufWriter::with_capacity(16 * 1024, io::stderr());
@@ -153,10 +152,11 @@ pub fn run(start: PathBuf, show_hidden: bool) -> io::Result<Outcome> {
 }
 
 impl State {
-    fn new(start: PathBuf, show_hidden: bool, favs: Vec<Favorite>, store: Option<PathBuf>) -> Self {
+    fn new(start: PathBuf, favs: Vec<Favorite>, store: Option<PathBuf>, cfg: Config) -> Self {
         let mut state = State {
             loc: Location::Dir(start),
-            show_hidden,
+            show_hidden: cfg.ui.show_hidden,
+            cfg,
             all: Vec::new(),
             entries: Vec::new(),
             cursor: 0,
@@ -224,12 +224,19 @@ impl State {
     /// Rebuild the visible list from `all` and the filter text (case-insensitive,
     /// matches anywhere in the name). The "." row is always kept.
     fn apply_filter(&mut self, focus: Option<&Path>) {
-        let needle = self.filter.to_lowercase();
+        let exact = self.cfg.ui.filter_case_sensitive;
+        let needle = if exact { self.filter.clone() } else { self.filter.to_lowercase() };
         let entries: Vec<Entry> = self
             .all
             .iter()
             .filter(|e| {
-                e.kind == Kind::Here || needle.is_empty() || e.label.to_lowercase().contains(&needle)
+                e.kind == Kind::Here
+                    || needle.is_empty()
+                    || if exact {
+                        e.label.contains(&needle)
+                    } else {
+                        e.label.to_lowercase().contains(&needle)
+                    }
             })
             .cloned()
             .collect();
@@ -343,6 +350,15 @@ impl State {
         }
     }
 
+    /// How a key is shown in messages and the help line, e.g. `tab` or `↑`.
+    fn nav_key(&self, action: Action) -> String {
+        self.cfg.keys.label(action).unwrap_or_else(|| "(unbound)".into())
+    }
+
+    fn fav_key(&self, action: Action) -> String {
+        self.cfg.fav_keys.label(action).unwrap_or_else(|| "(unbound)".into())
+    }
+
     /// `b`: bookmark the highlighted item. On the "." row that is the folder we
     /// are standing in.
     fn bookmark_highlighted(&mut self) {
@@ -356,8 +372,10 @@ impl State {
         }
         if self.favs.len() >= favorites::MAX {
             self.notice = Some(format!(
-                "favourites are full ({}). Press Tab, then x to remove one",
-                favorites::MAX
+                "favourites are full ({}). Press {}, then {} to remove one",
+                favorites::MAX,
+                self.nav_key(Action::ToggleFavorites),
+                self.fav_key(Action::Remove)
             ));
             return;
         }
@@ -377,8 +395,9 @@ impl State {
         let idx = (digit as u8 - b'1') as usize;
         if idx >= self.favs.len() {
             self.notice = Some(format!(
-                "slot {} is empty. Press b to bookmark the highlighted folder",
-                idx + 1
+                "slot {} is empty. Press {} to bookmark the highlighted folder",
+                idx + 1,
+                self.nav_key(Action::Bookmark)
             ));
             return;
         }
@@ -407,7 +426,11 @@ impl State {
             Err(e) => {
                 self.notice = Some(if e.kind() == io::ErrorKind::NotFound {
                     self.favs[idx].missing = true;
-                    format!("'{label}' no longer exists (press Tab, then x to remove it)")
+                    format!(
+                        "'{label}' no longer exists (press {}, then {} to remove it)",
+                        self.nav_key(Action::ToggleFavorites),
+                        self.fav_key(Action::Remove)
+                    )
                 } else {
                     format!("cannot open '{label}': {e}")
                 });
@@ -418,12 +441,16 @@ impl State {
     fn toggle_mode(&mut self) {
         match self.mode {
             Mode::Nav => {
-                if self.term_w < MIN_WIDTH_FOR_FAVS {
+                let min_w = self.cfg.ui.min_width_for_favorites;
+                if self.term_w < min_w {
                     self.notice = Some(format!(
-                        "window too narrow for favourites (needs {MIN_WIDTH_FOR_FAVS} columns)"
+                        "window too narrow for favourites (needs {min_w} columns)"
                     ));
                 } else if self.favs.is_empty() {
-                    self.notice = Some("no favourites yet. Press b to bookmark the highlighted folder".into());
+                    self.notice = Some(format!(
+                        "no favourites yet. Press {} to bookmark the highlighted folder",
+                        self.nav_key(Action::Bookmark)
+                    ));
                 } else {
                     self.mode = Mode::Favs;
                     let start = self.current_fav_index().unwrap_or(self.fav_cursor);
@@ -487,33 +514,36 @@ impl State {
         }
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-        // While the filter box is open, typed characters (digits and `b` included)
-        // go into it. Ctrl-C still quits.
+        // Ctrl-C always quits, whatever is configured.
+        if ctrl && key.code == KeyCode::Char('c') {
+            return Some(Outcome::Cancelled);
+        }
+
+        // While the filter box is open, typed characters (digits and the letters
+        // that are shortcuts elsewhere included) go into it.
         if self.filtering {
-            if ctrl && key.code == KeyCode::Char('c') {
-                return Some(Outcome::Cancelled);
-            }
             self.on_filter_key(key);
             return None;
         }
 
-        match key.code {
-            KeyCode::Char('c') if ctrl => return Some(Outcome::Cancelled),
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.toggle_mode();
-                return None;
-            }
-            KeyCode::Char(d @ '1'..='9') => {
+        // The number keys are fixed: they are the favourites.
+        if let KeyCode::Char(d @ '1'..='9') = key.code {
+            if !ctrl && !alt {
                 self.press_number(d);
                 return None;
             }
-            _ => {}
         }
 
+        let keymap = match self.mode {
+            Mode::Nav => &self.cfg.keys,
+            Mode::Favs => &self.cfg.fav_keys,
+        };
+        let action = keymap.lookup(&key)?;
         match self.mode {
-            Mode::Nav => self.on_key_nav(key),
-            Mode::Favs => self.on_key_favs(key),
+            Mode::Nav => self.do_nav(action),
+            Mode::Favs => self.do_favs(action),
         }
     }
 
@@ -550,11 +580,10 @@ impl State {
         }
     }
 
-    fn on_key_nav(&mut self, key: KeyEvent) -> Option<Outcome> {
-        match key.code {
-            KeyCode::Char('q') => return Some(Outcome::Cancelled),
-            // Esc first clears a filter left on the list; with none, it cancels.
-            KeyCode::Esc => {
+    fn do_nav(&mut self, action: Action) -> Option<Outcome> {
+        match action {
+            // First clears a filter left on the list; with none, it cancels.
+            Action::Cancel => {
                 if self.filter.is_empty() {
                     return Some(Outcome::Cancelled);
                 }
@@ -562,35 +591,32 @@ impl State {
                 self.filter.clear();
                 self.apply_filter(focus.as_deref());
             }
-            KeyCode::Char('/') => self.filtering = true,
-
-            KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
-            KeyCode::PageUp => self.move_by(-(self.page as isize)),
-            KeyCode::PageDown => self.move_by(self.page as isize),
-            KeyCode::Home | KeyCode::Char('g') => self.cursor = 0,
-            KeyCode::End | KeyCode::Char('G') => self.cursor = self.entries.len().saturating_sub(1),
-
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => self.descend(),
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => self.ascend(),
-
-            KeyCode::Char(' ') => return self.select(),
-
-            KeyCode::Char('b') => self.bookmark_highlighted(),
-            KeyCode::Char('.') => self.toggle_hidden(),
-            KeyCode::Char('~') => self.go_home(),
-            _ => {}
+            Action::Filter => self.filtering = true,
+            Action::MoveUp => self.move_by(-1),
+            Action::MoveDown => self.move_by(1),
+            Action::PageUp => self.move_by(-(self.page as isize)),
+            Action::PageDown => self.move_by(self.page as isize),
+            Action::Top => self.cursor = 0,
+            Action::Bottom => self.cursor = self.entries.len().saturating_sub(1),
+            Action::Open => self.descend(),
+            Action::Parent => self.ascend(),
+            Action::Select => return self.select(),
+            Action::Bookmark => self.bookmark_highlighted(),
+            Action::ToggleHidden => self.toggle_hidden(),
+            Action::Home => self.go_home(),
+            Action::ToggleFavorites => self.toggle_mode(),
+            Action::PickUp | Action::Rename | Action::Remove | Action::Back => {}
         }
         None
     }
 
-    fn on_key_favs(&mut self, key: KeyEvent) -> Option<Outcome> {
+    fn do_favs(&mut self, action: Action) -> Option<Outcome> {
         let holding = self.grabbed.is_some();
-        match key.code {
-            KeyCode::Char('q') => return Some(Outcome::Cancelled),
+        match action {
+            Action::Cancel => return Some(Outcome::Cancelled),
 
-            // Esc: undo a pick-up in progress, otherwise step back to navigation.
-            KeyCode::Esc => match self.grabbed.take() {
+            // Undo a pick-up in progress, otherwise step back to navigation.
+            Action::Back => match self.grabbed.take() {
                 Some((before, slot)) => {
                     self.favs = before;
                     self.fav_cursor = slot;
@@ -598,23 +624,24 @@ impl State {
                 None => self.leave_favs(),
             },
 
-            KeyCode::Up | KeyCode::Char('k') => self.fav_step(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.fav_step(1),
+            Action::MoveUp => self.fav_step(-1),
+            Action::MoveDown => self.fav_step(1),
 
-            // Space: pick up the item under the cursor, or put it down.
-            KeyCode::Char(' ') => {
+            // Pick up the item under the cursor, or put it down.
+            Action::PickUp => {
                 if self.grabbed.take().is_none() {
                     self.grabbed = Some((self.favs.clone(), self.fav_cursor));
                 }
             }
 
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if !holding => {
+            Action::Open if !holding => {
                 let idx = self.fav_cursor;
                 self.jump_to_fav(idx);
                 self.leave_favs();
             }
-            KeyCode::Char('x') | KeyCode::Delete if !holding => self.remove_fav(),
-            KeyCode::Char('r') if !holding => self.start_rename(),
+            Action::Remove if !holding => self.remove_fav(),
+            Action::Rename if !holding => self.start_rename(),
+            Action::ToggleFavorites => self.toggle_mode(),
             _ => {}
         }
         None
@@ -641,8 +668,9 @@ impl State {
                 }
             }
             KeyCode::Char(c) if !ctrl && !c.is_control() => {
+                let max = self.cfg.ui.max_alias_len;
                 if let Some(i) = self.input.as_mut() {
-                    if i.buf.chars().count() < ALIAS_MAX_CHARS {
+                    if i.buf.chars().count() < max {
                         i.buf.push(c);
                     }
                 }
@@ -682,7 +710,7 @@ impl State {
             self.fav_scroll = self.fav_cursor + 1 - list_h;
         }
 
-        let show_favs = w >= MIN_WIDTH_FOR_FAVS;
+        let show_favs = w >= self.cfg.ui.min_width_for_favorites;
         let lw = if show_favs { self.fav_panel_width(w) } else { 0 };
         let rx = if show_favs { lw + 3 } else { 0 };
         let rw = w.saturating_sub(rx).max(1);
@@ -823,22 +851,43 @@ impl State {
             put(out, 0, h.saturating_sub(2), &fit(&line, w), Look::Accent)?;
         }
 
-        let help = match (self.input.is_some(), self.mode, self.grabbed.is_some()) {
-            (true, _, _) => "enter save   esc cancel   (empty = use the folder's name)",
+        let help: String = match (self.input.is_some(), self.mode, self.grabbed.is_some()) {
+            (true, _, _) => "enter save   esc cancel   (empty = use the folder's name)".into(),
             (_, Mode::Nav, _) if self.filtering => {
-                "type to filter   ↑↓ move   enter/esc done (results stay)   ctrl-u clear"
+                "type to filter   ↑↓ move   enter/esc done (results stay)   ctrl-u clear".into()
             }
-            (_, Mode::Nav, _) => {
-                "↑↓←→ move   space select   / filter   b bookmark   1-9 jump   tab favs   . hidden   esc cancel"
-            }
-            (_, Mode::Favs, false) => {
-                "↑↓ move   space pick up   r rename   x remove   enter open   tab done   esc back"
-            }
-            (_, Mode::Favs, true) => {
-                "↑↓ move item   1-9 send to slot   space put down   esc undo   tab save & done"
-            }
+            (_, Mode::Nav, _) => format!(
+                "{}{} move   {} select   {} filter   {} bookmark   1-9 jump   {} favs   {} hidden   {} cancel",
+                self.nav_key(Action::MoveUp),
+                self.nav_key(Action::MoveDown),
+                self.nav_key(Action::Select),
+                self.nav_key(Action::Filter),
+                self.nav_key(Action::Bookmark),
+                self.nav_key(Action::ToggleFavorites),
+                self.nav_key(Action::ToggleHidden),
+                self.nav_key(Action::Cancel),
+            ),
+            (_, Mode::Favs, false) => format!(
+                "{}{} move   {} pick up   {} rename   {} remove   {} open   {} done   {} back",
+                self.fav_key(Action::MoveUp),
+                self.fav_key(Action::MoveDown),
+                self.fav_key(Action::PickUp),
+                self.fav_key(Action::Rename),
+                self.fav_key(Action::Remove),
+                self.fav_key(Action::Open),
+                self.fav_key(Action::ToggleFavorites),
+                self.fav_key(Action::Back),
+            ),
+            (_, Mode::Favs, true) => format!(
+                "{}{} move item   1-9 send to slot   {} put down   {} undo   {} save & done",
+                self.fav_key(Action::MoveUp),
+                self.fav_key(Action::MoveDown),
+                self.fav_key(Action::PickUp),
+                self.fav_key(Action::Back),
+                self.fav_key(Action::ToggleFavorites),
+            ),
         };
-        put(out, 0, h.saturating_sub(1), &fit(help, w), Look::Dim)?;
+        put(out, 0, h.saturating_sub(1), &fit(&help, w), Look::Dim)?;
 
         out.flush()
     }
@@ -956,6 +1005,10 @@ mod tests {
     /// A browser rooted at `root`, with favourites on `names` (folders created
     /// under root) and a store file inside root.
     fn setup(tag: &str, names: &[&str]) -> (State, PathBuf, PathBuf) {
+        setup_with(tag, names, Config::default())
+    }
+
+    fn setup_with(tag: &str, names: &[&str], cfg: Config) -> (State, PathBuf, PathBuf) {
         let root = scratch(tag);
         let mut favs = Vec::new();
         for n in names {
@@ -964,7 +1017,7 @@ mod tests {
             favs.push(Favorite::new(p));
         }
         let store = root.join("cfg").join("favorites.tsv");
-        let state = State::new(root.clone(), false, favs, Some(store.clone()));
+        let state = State::new(root.clone(), favs, Some(store.clone()), cfg);
         (state, root, store)
     }
 
@@ -1127,6 +1180,115 @@ mod tests {
         type_text(&mut s, "al");
         press(&mut s, &[KeyCode::Enter, KeyCode::Char('.')]);
         assert_eq!(labels(&s), [".", ".alhidden", "alpha", "alpine"]);
+    }
+
+    fn cfg_from(text: &str) -> Config {
+        let (cfg, warns) = crate::config::parse(text);
+        assert!(warns.is_empty(), "{warns:?}");
+        cfg
+    }
+
+    #[test]
+    fn rebinding_a_key_changes_what_it_does() {
+        let cfg = cfg_from("[keys]\nbookmark = B\nfilter = ctrl-f\nmove_down = s\nmove_up = w\n");
+        let (mut s, root, _store) = setup_with("rebind", &[], cfg);
+        fs::create_dir(root.join("one")).unwrap();
+        fs::create_dir(root.join("two")).unwrap();
+        s.reload(None);
+        press(&mut s, &[KeyCode::Char('s')]);
+        assert_eq!(s.entries[s.cursor].label, "two");
+        press(&mut s, &[KeyCode::Char('w')]);
+        assert_eq!(s.entries[s.cursor].label, "one");
+        // The old bookmark key is now just an unbound key.
+        press(&mut s, &[KeyCode::Char('b')]);
+        assert!(s.favs.is_empty());
+        s.on_key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT));
+        assert_eq!(s.favs[0].path, root.join("one"));
+        // And the filter now opens on Ctrl-F, not on /.
+        press(&mut s, &[KeyCode::Char('/')]);
+        assert!(!s.filtering);
+        s.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert!(s.filtering);
+    }
+
+    #[test]
+    fn rebound_favourites_keys_work_in_favourites_mode() {
+        let cfg = cfg_from("[keys.favorites]\nremove = d\nrename = n\n");
+        let (mut s, _root, _store) = setup_with("favrebind", &["a", "b"], cfg);
+        press(&mut s, &[KeyCode::Tab, KeyCode::Char('x')]);
+        assert_eq!(s.favs.len(), 2, "x no longer removes");
+        press(&mut s, &[KeyCode::Char('d')]);
+        assert_eq!(s.favs.len(), 1);
+        press(&mut s, &[KeyCode::Char('n')]);
+        assert!(s.input.is_some(), "n starts a rename");
+    }
+
+    #[test]
+    fn the_number_keys_and_ctrl_c_stay_fixed() {
+        let (mut s, _root, _store) = setup("fixed", &["a"]);
+        let out = s.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(out, Some(Outcome::Cancelled)));
+        press(&mut s, &[KeyCode::Char('1')]);
+        assert_eq!(here(&s).file_name().unwrap(), "a");
+    }
+
+    #[test]
+    fn unbinding_every_cancel_key_still_leaves_ctrl_c() {
+        let cfg = cfg_from("[keys]\ncancel =\n");
+        let (mut s, _root, _store) = setup_with("nocancel", &[], cfg);
+        assert!(s.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)).is_none());
+        assert!(s.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)).is_none());
+        let out = s.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(out, Some(Outcome::Cancelled)));
+    }
+
+    #[test]
+    fn messages_name_the_keys_you_configured() {
+        let cfg = cfg_from("[keys]\nbookmark = B\n");
+        let (mut s, _root, _store) = setup_with("msgkeys", &[], cfg);
+        press(&mut s, &[KeyCode::Char('3')]);
+        let msg = s.notice.clone().unwrap();
+        assert!(msg.contains("Press B to bookmark"), "{msg}");
+    }
+
+    #[test]
+    fn the_filter_can_be_made_case_sensitive() {
+        let cfg = cfg_from("[ui]\nfilter_case_sensitive = true\n");
+        let (mut s, root, _store) = setup_with("fcase", &[], cfg);
+        fs::create_dir(root.join("Gamma")).unwrap();
+        fs::create_dir(root.join("gamut")).unwrap();
+        s.reload(None);
+        press(&mut s, &[KeyCode::Char('/')]);
+        type_text(&mut s, "Gam");
+        assert_eq!(labels(&s), [".", "Gamma"]);
+    }
+
+    #[test]
+    fn show_hidden_in_the_config_applies_from_the_start() {
+        let cfg = cfg_from("[ui]\nshow_hidden = true\n");
+        let (mut s, root, _store) = setup_with("hid", &[], cfg);
+        fs::create_dir(root.join(".secret")).unwrap();
+        s.reload(None);
+        assert!(labels(&s).contains(&".secret".to_string()));
+    }
+
+    #[test]
+    fn the_alias_length_limit_is_configurable() {
+        let cfg = cfg_from("[ui]\nmax_alias_len = 8\n");
+        let (mut s, _root, _store) = setup_with("alen", &["proj"], cfg);
+        press(&mut s, &[KeyCode::Tab, KeyCode::Char('r')]);
+        type_text(&mut s, "abcdefghijkl");
+        assert_eq!(s.input.as_ref().unwrap().buf, "abcdefgh");
+    }
+
+    #[test]
+    fn the_favourites_panel_width_threshold_is_configurable() {
+        let cfg = cfg_from("[ui]\nmin_width_for_favorites = 200\n");
+        let (mut s, _root, _store) = setup_with("minw", &["a"], cfg);
+        s.term_w = 120;
+        press(&mut s, &[KeyCode::Tab]);
+        assert_eq!(s.mode, Mode::Nav);
+        assert!(s.notice.as_deref().unwrap().contains("needs 200 columns"));
     }
 
     #[test]

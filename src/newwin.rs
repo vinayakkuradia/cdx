@@ -5,13 +5,65 @@ use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-pub fn open(dir: &Path) -> io::Result<()> {
-    platform_open(dir)
+/// Open `dir` in a new terminal window. `command` is the user's own template
+/// (`new_window.command` in the config); without one, a built-in choice is made.
+pub fn open(dir: &Path, command: Option<&str>) -> io::Result<()> {
+    match command.map(split_command) {
+        None => platform_open(dir),
+        Some(Err(e)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("new_window.command: {e}"),
+        )),
+        Some(Ok(words)) => match words.split_first() {
+            None => platform_open(dir), // blank template: same as none
+            Some((program, rest)) => {
+                let path = dir.to_string_lossy();
+                let args: Vec<String> = rest.iter().map(|w| w.replace("{path}", &path)).collect();
+                spawn(Command::new(program).args(&args).current_dir(dir))
+                    .map_err(|e| io::Error::new(e.kind(), format!("could not run '{program}': {e}")))
+            }
+        },
+    }
+}
+
+/// Split a command line into words. Single or double quotes group words; there are
+/// no escape characters, so Windows paths can be written as they are.
+fn split_command(text: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    for c in text.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            (None, c) => {
+                cur.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err("unterminated quote".into());
+    }
+    if in_word {
+        words.push(cur);
+    }
+    Ok(words)
 }
 
 /// Start `cmd` without waiting for it, detached from our terminal so that
 /// closing this window does not close the new one.
-#[allow(dead_code)] // every platform uses it, but a cfg'd-out one might not
 fn spawn(cmd: &mut Command) -> io::Result<()> {
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(unix)]
@@ -115,4 +167,41 @@ fn platform_open(_dir: &Path) -> io::Result<()> {
         io::ErrorKind::Unsupported,
         "opening a new window is not supported on this platform",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commands_split_into_words_with_quotes_grouping() {
+        assert_eq!(
+            split_command("kitty --directory {path}").unwrap(),
+            ["kitty", "--directory", "{path}"]
+        );
+        assert_eq!(
+            split_command(r#"  wt -d "{path}"   --title 'my shell' "" "#).unwrap(),
+            ["wt", "-d", "{path}", "--title", "my shell", ""]
+        );
+        assert_eq!(
+            split_command(r"C:\Tools\term.exe {path}").unwrap(),
+            [r"C:\Tools\term.exe", "{path}"],
+            "backslashes are not escapes"
+        );
+        assert!(split_command("").unwrap().is_empty());
+        assert!(split_command("kitty 'oops").is_err());
+    }
+
+    #[test]
+    fn a_broken_template_is_reported_not_run() {
+        let e = open(Path::new("."), Some("kitty \"oops")).unwrap_err();
+        assert!(e.to_string().contains("unterminated quote"), "{e}");
+    }
+
+    #[test]
+    fn a_missing_program_names_itself_in_the_error() {
+        let e = open(Path::new("."), Some("cdx-no-such-terminal-xyz {path}")).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound);
+        assert!(e.to_string().contains("cdx-no-such-terminal-xyz"), "{e}");
+    }
 }

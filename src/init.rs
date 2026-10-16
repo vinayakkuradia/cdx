@@ -6,7 +6,7 @@ use std::process::ExitCode;
 const POSIX: &str = r#"# cdx shell integration (bash / zsh)
 cdx() {
   case "${1-}" in
-    init|--help|-V|--version) command cdx-bin "$@"; return $? ;;
+    init|config|--help|-V|--version) command cdx-bin "$@"; return $? ;;
   esac
   local dir
   dir="$(command cdx-bin "$@")" || return $?
@@ -19,7 +19,7 @@ cdx() {
 const FISH: &str = r#"# cdx shell integration (fish)
 function cdx
     switch "$argv[1]"
-        case init --help -V --version
+        case init config --help -V --version
             command cdx-bin $argv
             return $status
     end
@@ -33,7 +33,7 @@ end
 
 const POWERSHELL: &str = r#"# cdx shell integration (PowerShell 5.1 / 7+)
 function cdx {
-    if ($args.Count -gt 0 -and $args[0] -in @('init', '--help', '-V', '--version')) {
+    if ($args.Count -gt 0 -and $args[0] -in @('init', 'config', '--help', '-V', '--version')) {
         & cdx-bin @args
         return
     }
@@ -52,6 +52,7 @@ rem cdx shell integration (cmd.exe) - save as cdx.cmd somewhere on your PATH
 if /i "%~1"=="init" goto passthrough
 if /i "%~1"=="--help" goto passthrough
 if /i "%~1"=="--version" goto passthrough
+if /i "%~1"=="config" goto passthrough
 if /i "%~1"=="-V" goto passthrough
 set "CDX_DIR="
 for /f "usebackq delims=" %%i in (`cdx-bin %*`) do set "CDX_DIR=%%i"
