@@ -13,18 +13,24 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::commands;
+
 /// Number keys 1-9, so at most nine favourites.
 pub const MAX: usize = 9;
 
+/// A bookmarked folder, with an optional alias.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Favorite {
+    /// The folder; an absolute path.
     pub path: PathBuf,
+    /// A name chosen by the user; None means "use the folder's own name".
     pub alias: Option<String>,
     /// Set when the folder did not exist at load time. Never saved.
     pub missing: bool,
 }
 
 impl Favorite {
+    /// A favourite for `path` with no alias.
     pub fn new(path: PathBuf) -> Self {
         Favorite {
             path,
@@ -40,8 +46,25 @@ impl Favorite {
             _ => default_label(&self.path),
         }
     }
+
+    /// Is this favourite's name one of cdx's command words (see `commands`)?
+    /// Such a name could never be typed after `cdx`, so it is not allowed.
+    pub fn clashes_with_command(&self) -> bool {
+        commands::is_reserved(&self.label())
+    }
 }
 
+/// Favourites already on disk (e.g. hand-edited) whose name is a command word:
+/// their 1-based slot and the name. They still work by number.
+pub fn command_clashes(favs: &[Favorite]) -> Vec<(usize, String)> {
+    favs.iter()
+        .enumerate()
+        .filter(|(_, f)| f.clashes_with_command())
+        .map(|(i, f)| (i + 1, f.label()))
+        .collect()
+}
+
+/// The folder's own name, or the whole path for a root such as `/` or `C:\`.
 pub fn default_label(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -82,6 +105,8 @@ pub fn save_to(path: &Path, favs: &[Favorite]) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// Read favourites from the text of a favourites file: bad lines are skipped, the list is
+/// cut at nine entries and duplicates are dropped.
 pub fn parse(text: &str) -> Vec<Favorite> {
     let mut out: Vec<Favorite> = Vec::new();
     for line in text.lines() {
@@ -109,6 +134,7 @@ pub fn parse(text: &str) -> Vec<Favorite> {
     out
 }
 
+/// The text of a favourites file for `favs`, one `alias<TAB>path` line each.
 pub fn serialize(favs: &[Favorite]) -> String {
     let mut s = String::new();
     for f in favs {
@@ -196,5 +222,23 @@ mod tests {
         assert_eq!(back[0].alias.as_deref(), Some("First"));
         assert!(back[0].missing, "/one does not exist, so it is flagged");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn command_words_clash_as_alias_or_as_folder_name() {
+        let named = |p: &str, a: Option<&str>| fav(p, a);
+        assert!(named("/x/anything", Some("config")).clashes_with_command());
+        assert!(named("/x/anything", Some("Config")).clashes_with_command());
+        assert!(named("/x/config", None).clashes_with_command(), "unaliased: the folder name counts");
+        assert!(!named("/x/config", Some("settings")).clashes_with_command(), "an alias replaces the folder name");
+        assert!(!named("/x/configs", None).clashes_with_command());
+        assert!(named("/x/init", None).clashes_with_command());
+    }
+
+    #[test]
+    fn existing_clashes_are_found_with_their_slot() {
+        let favs = vec![fav("/a", None), fav("/b", Some("config")), fav("/c", None), fav("/x/init", None)];
+        assert_eq!(command_clashes(&favs), [(2, "config".to_string()), (4, "init".to_string())]);
+        assert!(command_clashes(&[fav("/a", None)]).is_empty());
     }
 }

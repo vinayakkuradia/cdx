@@ -1,13 +1,15 @@
 # cdx
 
-A tiny, fast, cross-platform folder navigator for your terminal.
-Type `cdx`, browse, press **Space**, and your shell is now in that folder.
+A tiny, fast, cross-platform folder navigator for your terminal, and a drop-in
+extension of `cd`. Type `cdx`, browse, press **Space**, and your shell is now in that
+folder. Type `cdx ..` or `cdx -` and it is just `cd`.
 
 - Windows, macOS, Linux
 - Single native binary (~0.5 MB), no runtime, no background service, no GUI
 - Hidden folders stay out of the way unless you ask: `cdx -h`
 - Up to nine **favourites**, one keypress away: `b` to bookmark the highlighted folder, `1`-`9` to jump
 - **Speed dial** from the shell: `cdx 1` or `cdx work` goes straight to a favourite
+- **Still `cd`**: anything that is not cdx's own is handed to your shell's `cd` unchanged
 - **Filter** as you type: press `/`
 - `cdx -n` opens the folder in a **new terminal window** instead
 
@@ -34,15 +36,15 @@ Nothing needs Rust, admin rights, or `sudo`.
 
 | Setting (environment variable) | Meaning |
 |---|---|
-| `CDX_VERSION=v0.1.0`        | install a specific release instead of the latest |
+| `CDX_VERSION=vX.Y.Z`        | install a specific release (a tag from the Releases page) instead of the latest |
 | `CDX_INSTALL_DIR=/some/dir` | install somewhere else |
 | `CDX_NO_MODIFY_SHELL=1`     | do not edit any shell config or profile |
 
 ```sh
-curl -fsSL https://github.com/vinayakkuradia/cdx/releases/latest/download/install.sh | CDX_VERSION=v0.1.0 sh
+curl -fsSL https://github.com/vinayakkuradia/cdx/releases/latest/download/install.sh | CDX_VERSION=vX.Y.Z sh
 ```
 ```powershell
-$env:CDX_VERSION = 'v0.1.0'; irm https://github.com/vinayakkuradia/cdx/releases/latest/download/install.ps1 | iex
+$env:CDX_VERSION = 'vX.Y.Z'; irm https://github.com/vinayakkuradia/cdx/releases/latest/download/install.ps1 | iex
 ```
 
 **Uninstall**
@@ -83,18 +85,53 @@ The installers do this for you. (Markers `# >>> cdx >>>` ... `# <<< cdx <<<` del
 | PowerShell | `$PROFILE`                          | `Invoke-Expression (& cdx-bin init powershell \| Out-String)` |
 | cmd.exe    | any folder on `PATH`                | `cdx-bin init cmd > cdx.cmd`                                  |
 
+The bash, zsh, fish and PowerShell lines run `cdx-bin init` every time a shell starts, so they
+pick up new versions by themselves. `cdx.cmd` is a saved file: regenerate it after upgrading
+(`cdx-bin init cmd > cdx.cmd`; the Windows installer does this for you).
+
 ## Usage
 
 ```
-cdx            browse from the current folder
-cdx -h         ...with hidden folders shown
-cdx <path>     browse starting at <path>
-cdx 1          speed dial: cd to favourite #1 (1-9), no browser
-cdx work       speed dial by name or alias (case-insensitive)
-cdx -n         browse, then open the chosen folder in a new terminal window
-cdx -n 2       open favourite #2 in a new terminal window
-cdx --help     full help
+cdx              open the browser (plain `cd` would go home; this is cdx's job)
+cdx 1            go to favourite #1 (1-9)
+cdx work         go to the favourite named or aliased "work" (case-insensitive)
+cdx ..  cdx -    anything else is plain `cd`: cdx .., cdx -, cdx ~/src, cdx -L link
+cdx -b [path]    open the browser, starting at path
+cdx -h           browser with hidden folders shown
+cdx -n           browse, then open the chosen folder in a new terminal window
+cdx -n 2         open favourite #2 in a new terminal window
+cdx config ...   cdx's own commands (see Configuration)
+cdx --help       full help
 ```
+
+## Working as `cd`
+
+With the shell integration installed, `cdx` can stand in for `cd`. It decides in this order:
+
+1. **No arguments**: the browser. (This is the one place cdx differs from `cd`, which
+   would go home. Use `cdx ~` for that.)
+2. **cdx's own words and options**: `init`, `config`, `-b`, `-h`, `-n`, `--help`, `-V`.
+3. **One bare word or digit**: if it names a favourite (a slot number, an alias, or the
+   folder name of an unaliased favourite), cdx goes there. **Favourites win** over a
+   folder of the same name in the current directory; write `cdx ./name` for the folder.
+4. **Everything else goes to `cd`, exactly as typed**: `cdx ..`, `cdx -`, `cdx ~/src`,
+   `cdx /some/dir`, `cdx -L link`, `cdx -- -odd-name`, `cdx some-local-folder`, and
+   errors such as "no such file or directory" come from `cd` itself, and so do
+   `CDPATH`, `cd -`, and any `cd` function or hook you have defined.
+
+Mixing cdx's options with `cd`'s (`cdx -n -L x`) is an error, because nothing is passed
+on once a cdx option is used. Opening the browser at a folder used to be `cdx <path>`;
+it is now `cdx -b <path>`.
+
+Without the shell integration `cdx-bin` cannot run `cd` for you; it says so instead.
+
+**Reserved words.** Every cdx command name is reserved (today `init` and `config`),
+case-insensitively. A favourite cannot be given such a name as alias, and a folder with
+that name cannot be bookmarked (cdx tells you why). Otherwise `cdx config` could never
+reach that favourite. A favourite that already has such a name, e.g. from a hand-edited
+`favorites.tsv`, still works by number and cdx points it out when the browser opens.
+New commands are added in one table (`src/commands.rs`); adding a row reserves the name
+and teaches the shell wrappers to pass it through, with no other change.
 
 | Default key                | Action                              |
 |----------------------------|-------------------------------------|
@@ -137,14 +174,15 @@ toggling hidden folders keeps it.
 
 `cdx 1` ... `cdx 9` change to the folder in that favourite slot, without opening the
 browser. `cdx <name>` does the same for the favourite whose alias (or folder name, when
-it has no alias) matches, ignoring case. Names with a slash, a drive colon or a leading
-`.`/`~` are always treated as paths, and a word that is not a favourite still works as a
-folder in the current directory. If there is no such favourite, or its folder was
-deleted, cdx prints an error and exits with code 2, so your shell stays put.
-(`init` is reserved for `cdx init <shell>`.)
+it has no alias) matches: an exact match first, then ignoring case. Words with a slash,
+a drive colon or a leading `.`, `~` or `-` are never looked up; they go to `cd`. If the
+word is not a favourite, `cd` gets it (see "Working as cd"), so `cdx 5` with only three
+favourites is `cd 5`. A favourite whose folder has been deleted is reported by cdx
+(exit code 2) instead, so your shell stays put.
 
-`-n` / `--new-window` works with the browser and with speed dial. The chosen folder opens
-in a new window and your current shell does not move.
+`-n` / `--new-window` works with the browser, with speed dial, and with a folder path
+(`cdx -n ~/src` opens it in a new window). The chosen folder opens in a new window and
+your current shell does not move.
 
 | OS | Opens |
 |----|-------|
@@ -311,8 +349,10 @@ So the project ships two parts:
 1. **`cdx-bin`**, the native binary. It draws its UI on **stderr** and prints
    only the chosen path to **stdout**. Cancelling prints nothing and exits with code 0, since it is a normal outcome.
 2. **A tiny shell function named `cdx`** (from `cdx-bin init <shell>`) that
-   runs the binary and `cd`s to whatever it printed. `cdx init`, `--help`
-   and `--version` pass straight through.
+   runs the binary and acts on what it printed: a folder path means `cd` there; the
+   marker `cdx:use-cd` means "this was ordinary `cd` usage", so the function runs `cd`
+   with your original arguments; nothing means stay put. Commands (`init`, `config`),
+   `--help` and `--version` pass straight through.
 
 If you run `cdx-bin` directly without the wrapper, it still works, but tells you
 that the shell integration is not active.
@@ -320,7 +360,9 @@ that the shell integration is not active.
 ## Project layout
 
 ```
-src/main.rs      argument parsing, exit codes, printing the result
+src/main.rs      glue: what each kind of request does, printing the result
+src/cli.rs       reading the command line, deciding what is cdx's and what is `cd`'s
+src/commands.rs  cdx's own commands (init, config) and the reserved-name list
 src/browser.rs   the interactive browser (state, keys, drawing, favourites panel)
 src/config.rs    settings, key bindings, config.ini parsing, data folder paths
 src/favorites.rs favourites: data, file format, load/save
@@ -345,7 +387,7 @@ cargo build --release    # LTO + strip, around 0.5 MB
 ## Releasing
 
 1. Bump `version` in `Cargo.toml`, run `cargo build` (updates `Cargo.lock`), commit and push.
-2. Tag and push: `git tag v0.1.1 && git push origin v0.1.1`
+2. Tag and push, using the same `X.Y.Z` as in `Cargo.toml`: `git tag vX.Y.Z && git push origin vX.Y.Z`
 3. The **release** workflow builds six targets, packages them with checksums, stamps your
    repository into `install.sh` / `install.ps1`, and publishes a GitHub release.
    It refuses to run if the tag does not match the version in `Cargo.toml`.

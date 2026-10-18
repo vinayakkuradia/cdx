@@ -16,18 +16,23 @@ use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+/// Name of the folder, inside your home folder, where cdx keeps its files.
 pub const DIR_NAME: &str = ".cdx";
+/// Name of the settings file inside that folder.
 pub const CONFIG_FILE: &str = "config.ini";
+/// Default name of the favourites file inside that folder.
 pub const DEFAULT_FAVORITES_FILE: &str = "favorites.tsv";
 /// Set this environment variable to keep cdx's files somewhere else.
 pub const ENV_DIR: &str = "CDX_CONFIG_DIR";
 
 // ======================================================================= paths
 
+/// The value of environment variable `name`, treating an empty value as unset.
 fn non_empty_env(name: &str) -> Option<std::ffi::OsString> {
     env::var_os(name).filter(|v| !v.is_empty())
 }
 
+/// Your home folder (`HOME`, or `USERPROFILE` on Windows).
 fn home() -> Option<PathBuf> {
     #[cfg(windows)]
     let var = "USERPROFILE";
@@ -44,7 +49,7 @@ pub fn data_dir_from_env() -> Option<PathBuf> {
     home().map(|h| h.join(DIR_NAME))
 }
 
-/// Where cdx 0.2 and earlier kept the favourites file.
+/// Where earlier versions of cdx kept the favourites file.
 fn legacy_favorites_path() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -78,29 +83,49 @@ pub fn migrate_favorites(old: &Path, new: &Path) -> io::Result<bool> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     // browsing
+    /// Move the cursor up one row.
     MoveUp,
+    /// Move the cursor down one row.
     MoveDown,
+    /// Move up one screenful.
     PageUp,
+    /// Move down one screenful.
     PageDown,
+    /// Jump to the first row.
     Top,
+    /// Jump to the last row.
     Bottom,
+    /// Open the highlighted folder (or, in favourites mode, go to the favourite).
     Open,
+    /// Go up to the parent folder.
     Parent,
+    /// Choose the highlighted folder and leave.
     Select,
+    /// Leave without choosing; with a filter showing, clears the filter first.
     Cancel,
+    /// Show or hide hidden folders.
     ToggleHidden,
+    /// Jump to the home folder.
     Home,
+    /// Bookmark the highlighted folder as a favourite.
     Bookmark,
+    /// Open the filter box.
     Filter,
+    /// Switch between browsing and editing favourites.
     ToggleFavorites,
     // favourites mode
+    /// Pick up (or put down) a favourite, to reorder it.
     PickUp,
+    /// Open the alias prompt for a favourite.
     Rename,
+    /// Remove a favourite.
     Remove,
+    /// Undo a pick-up, or leave favourites mode.
     Back,
 }
 
 impl Action {
+    /// Every action, in the order they are listed in the documentation.
     pub const ALL: &'static [Action] = &[
         Action::MoveUp,
         Action::MoveDown,
@@ -148,6 +173,7 @@ impl Action {
         }
     }
 
+    /// The action called `s` in the config file (case-insensitive), if there is one.
     pub fn from_name(s: &str) -> Option<Action> {
         Action::ALL
             .iter()
@@ -155,6 +181,7 @@ impl Action {
             .find(|a| a.name().eq_ignore_ascii_case(s))
     }
 
+    /// One line saying what the action does; written into the generated config file.
     pub fn description(self) -> &'static str {
         match self {
             Action::MoveUp => "move the cursor up",
@@ -214,11 +241,16 @@ pub const FAVORITES_ACTIONS: &[Action] = &[
 
 // ====================================================================== keys
 
+/// One key as written in the config file: a key plus the modifiers that must be held.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct KeySpec {
+    /// Which key: a character or a named key such as Enter or Up.
     pub code: KeyCode,
+    /// Ctrl must be held.
     pub ctrl: bool,
+    /// Alt must be held.
     pub alt: bool,
+    /// Shift must be held (ignored for characters, which already carry it).
     pub shift: bool,
 }
 
@@ -350,10 +382,12 @@ pub fn parse_key(text: &str) -> Result<KeySpec, String> {
 /// Which keys trigger which actions, for one mode.
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyMap {
+    /// Each action with the keys bound to it; the order decides which action wins a conflict.
     entries: Vec<(Action, Vec<KeySpec>)>,
 }
 
 impl KeyMap {
+    /// Build a map from `(action, "key key ...")` rows; used for the built-in defaults.
     fn from_table(table: &[(Action, &str)]) -> KeyMap {
         let entries = table
             .iter()
@@ -368,6 +402,7 @@ impl KeyMap {
         KeyMap { entries }
     }
 
+    /// The keys bound to `action` (empty if none).
     pub fn keys(&self, action: Action) -> &[KeySpec] {
         self.entries
             .iter()
@@ -376,10 +411,12 @@ impl KeyMap {
             .unwrap_or(&[])
     }
 
+    /// The actions this map covers, in order.
     pub fn actions(&self) -> impl Iterator<Item = Action> + '_ {
         self.entries.iter().map(|(a, _)| *a)
     }
 
+    /// Replace the keys bound to `action`; ignored if the map does not cover that action.
     pub fn set(&mut self, action: Action, keys: Vec<KeySpec>) {
         if let Some(slot) = self.entries.iter_mut().find(|(a, _)| *a == action) {
             slot.1 = keys;
@@ -436,6 +473,7 @@ impl KeyMap {
         out
     }
 
+    /// The built-in key bindings for browsing folders.
     pub fn browse_defaults() -> KeyMap {
         KeyMap::from_table(&[
             (Action::MoveUp, "up k"),
@@ -456,6 +494,7 @@ impl KeyMap {
         ])
     }
 
+    /// The built-in key bindings for editing favourites.
     pub fn favorites_defaults() -> KeyMap {
         KeyMap::from_table(&[
             (Action::MoveUp, "up k"),
@@ -473,6 +512,7 @@ impl KeyMap {
 
 // =================================================================== settings
 
+/// Interface settings (`[ui]` in the config file).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ui {
     /// Show hidden folders from the start (the -h flag does the same).
@@ -486,6 +526,7 @@ pub struct Ui {
 }
 
 impl Default for Ui {
+    /// The built-in interface settings.
     fn default() -> Self {
         Ui {
             show_hidden: false,
@@ -496,22 +537,28 @@ impl Default for Ui {
     }
 }
 
+/// Everything configurable: where files live, interface settings, the `-n` command and key
+/// bindings. `Config::default()` is what you get without a config file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     /// Where cdx keeps its files. Not settable from the file itself.
     pub data_dir: Option<PathBuf>,
     /// Relative to `data_dir`, or absolute.
     pub favorites_file: PathBuf,
+    /// Interface settings.
     pub ui: Ui,
     /// macOS: when a protected folder was refused earlier, ask the system again.
     pub macos_ask_again: bool,
     /// Template for `cdx -n`, e.g. `kitty --directory {path}`. None = built-in choice.
     pub new_window_command: Option<String>,
+    /// Key bindings while browsing folders (`[keys]`).
     pub keys: KeyMap,
+    /// Key bindings while editing favourites (`[keys.favorites]`).
     pub fav_keys: KeyMap,
 }
 
 impl Default for Config {
+    /// The built-in configuration: every setting at its default.
     fn default() -> Self {
         Config {
             data_dir: None,
@@ -546,15 +593,17 @@ impl Config {
         }
     }
 
+    /// Where the settings file lives (it may not exist); None if there is no data folder.
     pub fn config_path(&self) -> Option<PathBuf> {
         self.data_dir.as_ref().map(|d| d.join(CONFIG_FILE))
     }
 
+    /// Where the favourites file lives; None if there is no data folder.
     pub fn favorites_path(&self) -> Option<PathBuf> {
         self.data_dir.as_ref().map(|d| d.join(&self.favorites_file))
     }
 
-    /// First run after upgrading from 0.2: copy the favourites from their old home.
+    /// First run after an upgrade from a version that kept favourites elsewhere: copy them over.
     /// Only when everything is at its default place.
     pub fn migrate_legacy_favorites(&self) -> io::Result<bool> {
         if non_empty_env(ENV_DIR).is_some() || self.favorites_file != Path::new(DEFAULT_FAVORITES_FILE) {
@@ -658,12 +707,14 @@ impl Config {
     }
 }
 
+/// Key names separated by spaces, as written after `=` in the config file.
 fn join_keys(keys: &[KeySpec]) -> String {
     keys.iter().map(KeySpec::name).collect::<Vec<_>>().join(" ")
 }
 
 // ===================================================================== parsing
 
+/// The section names a config file may contain.
 const SECTIONS: &[&str] = &["paths", "ui", "permissions", "new_window", "keys", "keys.favorites"];
 
 /// Parse a config file on top of the defaults.
@@ -672,6 +723,7 @@ pub fn parse(text: &str) -> (Config, Vec<String>) {
     parse_into(Config::default(), text)
 }
 
+/// Read `text` on top of `cfg`. Mistakes are skipped and reported in the returned warnings.
 fn parse_into(mut cfg: Config, text: &str) -> (Config, Vec<String>) {
     let mut warns = Vec::new();
     let mut section = String::new();
@@ -752,6 +804,8 @@ fn parse_into(mut cfg: Config, text: &str) -> (Config, Vec<String>) {
     (cfg, warns)
 }
 
+/// Parse a true/false value into `dst`; a bad value leaves `dst` alone and adds a warning.
+/// Always returns true (the setting name was known).
 fn set_bool(dst: &mut bool, value: &str, n: usize, warns: &mut Vec<String>) -> bool {
     match value.to_ascii_lowercase().as_str() {
         "true" | "yes" | "on" | "1" => *dst = true,
@@ -761,6 +815,8 @@ fn set_bool(dst: &mut bool, value: &str, n: usize, warns: &mut Vec<String>) -> b
     true
 }
 
+/// Parse a number into `dst`, clamped to `min..=max`; a bad value leaves `dst` alone and warns.
+/// Always returns true (the setting name was known).
 fn set_num(dst: &mut usize, value: &str, min: usize, max: usize, n: usize, warns: &mut Vec<String>) -> bool {
     match value.parse::<usize>() {
         Ok(v) => *dst = v.clamp(min, max),
@@ -769,6 +825,8 @@ fn set_num(dst: &mut usize, value: &str, min: usize, max: usize, n: usize, warns
     true
 }
 
+/// Apply a `[keys]` line: look up the action, parse its keys, drop reserved or invalid ones.
+/// Returns false if `key` is not an action available in this section.
 fn set_keys(
     map: &mut KeyMap,
     allowed: &[Action],

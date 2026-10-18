@@ -18,78 +18,111 @@ use crossterm::{
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
+use crate::commands;
 use crate::config::{Action, Config};
 use crate::favorites::{self, Favorite};
 use crate::fsutil;
 
+/// How a browsing session ended; `main` turns it into output and an exit code.
 pub enum Outcome {
+    /// The user chose this folder: print it so the shell can `cd` there.
     Selected(PathBuf),
+    /// The user left without choosing: print nothing and change nothing.
     Cancelled,
 }
 
 /// Where the browser currently is.
 enum Location {
+    /// An ordinary folder.
     Dir(PathBuf),
     /// Windows only: the list of drive letters above `C:\`.
     Drives,
 }
 
+/// What a row in the folder list stands for.
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     /// The "." row: selecting it picks the folder you are standing in.
     Here,
+    /// A sub-folder: Enter opens it, Space chooses it.
     Folder,
+    /// A Windows drive root such as `C:\`, shown in the drive list.
     Drive,
 }
 
+/// One row of the folder list (the "." row, a folder, or a drive).
 #[derive(Clone)]
 struct Entry {
+    /// Text shown on screen: the folder name, `.`, or the drive root.
     label: String,
+    /// Absolute path this row stands for; what Space chooses.
     path: PathBuf,
+    /// Which sort of row this is.
     kind: Kind,
 }
 
 /// Which panel owns the cursor.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Mode {
+    /// The cursor is in the folder list (the default).
     Nav,
+    /// The cursor is in the favourites panel (reorder, rename, remove).
     Favs,
 }
 
 /// A one-line text prompt (used to rename a favourite).
 struct Input {
+    /// The text typed so far.
     buf: String,
+    /// Index in `State::favs` of the favourite being renamed.
     target: usize,
 }
 
+/// Everything the browser knows while it runs: where it is, what is listed, the
+/// favourites, which panel has the cursor, and any message for the user.
 struct State {
     // navigation
+    /// The folder (or drive list) being browsed.
     loc: Location,
+    /// Whether hidden folders are listed; starts from the config, toggled at runtime.
     show_hidden: bool,
+    /// The loaded configuration: key bindings, limits and switches.
     cfg: Config,
     /// Everything in the folder; `entries` is the part that matches `filter`.
     all: Vec<Entry>,
+    /// The rows on screen: `all` narrowed by `filter`.
     entries: Vec<Entry>,
+    /// Index in `entries` of the highlighted row.
     cursor: usize,
+    /// Index in `entries` of the first visible row.
     scroll: usize,
+    /// Rows moved by a page-up or page-down; set from the window height on each draw.
     page: usize,
     /// Text typed after `/`. Stays applied after filter mode is closed.
     filter: String,
     /// The filter box has the keyboard.
     filtering: bool,
     // favourites
+    /// The favourites, in slot order (slot 1 first).
     favs: Vec<Favorite>,
+    /// Where favourites are saved; None if there is no usable config folder.
     store: Option<PathBuf>,
+    /// Which panel the keys act on.
     mode: Mode,
+    /// Index in `favs` of the highlighted favourite.
     fav_cursor: usize,
+    /// Index in `favs` of the first visible favourite.
     fav_scroll: usize,
     /// While an item is "picked up": the order before the pick-up, and its slot.
     grabbed: Option<(Vec<Favorite>, usize)>,
     /// The order was changed and has not been written to disk yet.
     dirty: bool,
+    /// The rename prompt, while it is open.
     input: Option<Input>,
     // misc
+    /// A one-line message for the footer; cleared on the next key press.
     notice: Option<String>,
+    /// Terminal width in columns at the last draw (decides whether the favourites panel fits).
     term_w: usize,
 }
 
@@ -100,6 +133,7 @@ const FILTER_MAX_CHARS: usize = 64;
 struct TermGuard;
 
 impl TermGuard {
+    /// Switch to raw mode and the alternate screen on stderr. Dropping the guard undoes both.
     fn enter() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         let guard = TermGuard; // from here on, Drop undoes raw mode
@@ -109,6 +143,7 @@ impl TermGuard {
 }
 
 impl Drop for TermGuard {
+    /// Leave the alternate screen and raw mode, ignoring errors (we may be panicking).
     fn drop(&mut self) {
         let _ = execute!(io::stderr(), cursor::Show, LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
@@ -123,8 +158,19 @@ pub fn run(start: PathBuf, cfg: Config, startup_notice: Option<String>) -> io::R
         Some(Err(e)) => (Vec::new(), Some(format!("could not read favourites: {e}"))),
         None => (Vec::new(), None),
     };
+    let clashes = favorites::command_clashes(&favs);
+    let clash_notice = (!clashes.is_empty()).then(|| {
+        let list: Vec<String> = clashes
+            .iter()
+            .map(|(slot, name)| format!("{slot} ('{name}')"))
+            .collect();
+        format!(
+            "favourite {} is named like a cdx command and cannot be reached by name; rename it",
+            list.join(", ")
+        )
+    });
     let mut state = State::new(start, favs, store, cfg);
-    state.notice = warning.or(startup_notice);
+    state.notice = warning.or(clash_notice).or(startup_notice);
 
     let guard = TermGuard::enter()?;
     let mut out = BufWriter::with_capacity(16 * 1024, io::stderr());
@@ -152,6 +198,7 @@ pub fn run(start: PathBuf, cfg: Config, startup_notice: Option<String>) -> io::R
 }
 
 impl State {
+    /// A browser at `start` with the given favourites, save location and settings.
     fn new(start: PathBuf, favs: Vec<Favorite>, store: Option<PathBuf>, cfg: Config) -> Self {
         let mut state = State {
             loc: Location::Dir(start),
@@ -249,17 +296,20 @@ impl State {
         self.scroll = 0;
     }
 
+    /// Move the cursor by `delta` rows, stopping at the first and last row.
     fn move_by(&mut self, delta: isize) {
         let last = self.entries.len().saturating_sub(1) as isize;
         self.cursor = (self.cursor as isize + delta).clamp(0, last) as usize;
     }
 
+    /// The outcome of choosing the highlighted row (None if the list is empty).
     fn select(&self) -> Option<Outcome> {
         self.entries
             .get(self.cursor)
             .map(|e| Outcome::Selected(e.path.clone()))
     }
 
+    /// Open the highlighted folder; "." does nothing, and a refusal becomes a notice.
     fn descend(&mut self) {
         let Some(entry) = self.entries.get(self.cursor) else {
             return;
@@ -278,6 +328,8 @@ impl State {
         }
     }
 
+    /// Go to the parent folder with the cursor on the one we came from; on Windows a
+    /// drive root leads to the drive list.
     fn ascend(&mut self) {
         let from = match &self.loc {
             Location::Dir(p) => p.clone(),
@@ -294,12 +346,14 @@ impl State {
         self.reload(Some(&from));
     }
 
+    /// Show or hide hidden folders, keeping the cursor on the same row if it survives.
     fn toggle_hidden(&mut self) {
         let focus = self.entries.get(self.cursor).map(|e| e.path.clone());
         self.show_hidden = !self.show_hidden;
         self.reload(focus.as_deref());
     }
 
+    /// Jump to the home folder.
     fn go_home(&mut self) {
         match fsutil::home_dir() {
             Some(home) => {
@@ -313,6 +367,7 @@ impl State {
 
     // -------------------------------------------------------------- favourites
 
+    /// The folder being browsed, or None while the drive list is shown.
     fn current_dir(&self) -> Option<&Path> {
         match &self.loc {
             Location::Dir(p) => Some(p),
@@ -326,6 +381,7 @@ impl State {
         self.favs.iter().position(|f| f.path == here)
     }
 
+    /// Write the favourites file. Returns a message for the user on failure.
     fn save_now(&mut self) -> Result<(), String> {
         let Some(path) = &self.store else {
             return Err("no config folder available, favourites cannot be saved".into());
@@ -355,6 +411,7 @@ impl State {
         self.cfg.keys.label(action).unwrap_or_else(|| "(unbound)".into())
     }
 
+    /// Like `nav_key`, for the favourites-mode bindings.
     fn fav_key(&self, action: Action) -> String {
         self.cfg.fav_keys.label(action).unwrap_or_else(|| "(unbound)".into())
     }
@@ -383,7 +440,12 @@ impl State {
             self.notice = Some("this path cannot be stored as a favourite".into());
             return;
         }
-        self.favs.push(Favorite::new(path));
+        let fav = Favorite::new(path);
+        if fav.clashes_with_command() {
+            self.notice = Some(commands::clash_message(&fav.label()));
+            return;
+        }
+        self.favs.push(fav);
         self.dirty = true;
         self.notice = Some(format!("added as favourite {}", self.favs.len()));
         self.persist(); // overrides the notice only if saving failed
@@ -414,6 +476,7 @@ impl State {
         }
     }
 
+    /// Go to the folder of favourite `idx`. If it was deleted, mark it missing and say how to remove it.
     fn jump_to_fav(&mut self, idx: usize) {
         let path = self.favs[idx].path.clone();
         let label = self.favs[idx].label();
@@ -438,6 +501,8 @@ impl State {
         }
     }
 
+    /// Switch between navigating and editing favourites (refused when the window is too
+    /// narrow or there are no favourites).
     fn toggle_mode(&mut self) {
         match self.mode {
             Mode::Nav => {
@@ -469,6 +534,7 @@ impl State {
         self.flush();
     }
 
+    /// Move the favourites cursor; while an item is picked up it swaps places with its neighbour.
     fn fav_step(&mut self, delta: isize) {
         let last = self.favs.len().saturating_sub(1) as isize;
         let to = (self.fav_cursor as isize + delta).clamp(0, last) as usize;
@@ -479,6 +545,7 @@ impl State {
         self.fav_cursor = to;
     }
 
+    /// Remove the highlighted favourite and save.
     fn remove_fav(&mut self) {
         if self.favs.is_empty() {
             return;
@@ -494,6 +561,7 @@ impl State {
         }
     }
 
+    /// Open the alias prompt for the highlighted favourite, prefilled with its current alias.
     fn start_rename(&mut self) {
         if let Some(f) = self.favs.get(self.fav_cursor) {
             self.input = Some(Input {
@@ -505,6 +573,9 @@ impl State {
 
     // ------------------------------------------------------------------- keys
 
+    /// Handle one key press: the rename prompt first, then Ctrl-C, the filter box, the fixed
+    /// number keys, and finally the configured bindings for the current mode.
+    /// Returns an outcome when the session should end.
     fn on_key(&mut self, key: KeyEvent) -> Option<Outcome> {
         self.notice = None;
 
@@ -580,6 +651,7 @@ impl State {
         }
     }
 
+    /// Run an action while navigating folders.
     fn do_nav(&mut self, action: Action) -> Option<Outcome> {
         match action {
             // First clears a filter left on the list; with none, it cancels.
@@ -610,6 +682,7 @@ impl State {
         None
     }
 
+    /// Run an action while editing favourites; actions that do not apply are ignored.
     fn do_favs(&mut self, action: Action) -> Option<Outcome> {
         let holding = self.grabbed.is_some();
         match action {
@@ -647,6 +720,8 @@ impl State {
         None
     }
 
+    /// Keys inside the rename prompt: text, Backspace, Enter to confirm, Esc to cancel.
+    /// A name that is a cdx command word is refused.
     fn on_input_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
@@ -655,10 +730,16 @@ impl State {
             KeyCode::Enter => {
                 if let Some(input) = self.input.take() {
                     let alias = input.buf.trim().to_string();
+                    let alias = if alias.is_empty() { None } else { Some(alias) };
                     if let Some(f) = self.favs.get_mut(input.target) {
-                        f.alias = if alias.is_empty() { None } else { Some(alias) };
-                        self.dirty = true;
-                        self.persist();
+                        let renamed = Favorite { alias, ..f.clone() };
+                        if renamed.clashes_with_command() {
+                            self.notice = Some(commands::clash_message(&renamed.label()));
+                        } else {
+                            f.alias = renamed.alias;
+                            self.dirty = true;
+                            self.persist();
+                        }
                     }
                 }
             }
@@ -681,6 +762,7 @@ impl State {
 
     // ---------------------------------------------------------------- drawing
 
+    /// Width of the favourites panel: fits the longest name, within sane limits and a third of the window.
     fn fav_panel_width(&self, term_w: usize) -> usize {
         let longest = self
             .favs
@@ -691,6 +773,7 @@ impl State {
         (longest + 6).clamp(18, 30).min(term_w / 3).max(12)
     }
 
+    /// Redraw the whole screen: header, both panels, footer message and help line.
     fn draw(&mut self, out: &mut impl Write) -> io::Result<()> {
         let (w, h) = terminal::size()?;
         // Some terminals (and CI pseudo-terminals) report 0x0, meaning "unknown".
@@ -893,15 +976,24 @@ impl State {
     }
 }
 
+/// How a piece of text is styled when printed with `put`.
 #[derive(Clone, Copy)]
 enum Look {
+    /// Terminal defaults.
     Plain,
+    /// Faded: help line, hints.
     Dim,
+    /// Bold cyan: the current folder.
     Title,
+    /// Cyan: the filter and rename prompts, the favourites column.
     Accent,
+    /// Bold green: the highlighted row.
     Cursor,
+    /// Bold yellow: a favourite that is picked up.
     Grab,
+    /// Red: something that no longer exists.
     Warn,
+    /// Yellow: one-line messages.
     Notice,
 }
 
@@ -1186,6 +1278,51 @@ mod tests {
         let (cfg, warns) = crate::config::parse(text);
         assert!(warns.is_empty(), "{warns:?}");
         cfg
+    }
+
+    #[test]
+    fn a_folder_named_like_a_command_cannot_be_bookmarked() {
+        let (mut s, root, _store) = setup("clash1", &[]);
+        for name in ["config", "Init", "fine"] {
+            fs::create_dir(root.join(name)).unwrap();
+        }
+        s.reload(None); // sorted: ".", config, fine, Init
+        press(&mut s, &[KeyCode::Char('b')]); // on "config"
+        assert!(s.favs.is_empty());
+        assert!(s.notice.as_deref().unwrap().contains("'config' is a cdx command"));
+        press(&mut s, &[KeyCode::Char('j'), KeyCode::Char('b')]); // "fine"
+        assert_eq!(s.favs.len(), 1);
+        press(&mut s, &[KeyCode::Char('j'), KeyCode::Char('b')]); // "Init": case does not matter
+        assert_eq!(s.favs.len(), 1);
+        assert!(s.notice.as_deref().unwrap().contains("cdx command"));
+    }
+
+    #[test]
+    fn a_favourite_cannot_be_renamed_to_a_command_word() {
+        let (mut s, _root, _store) = setup("clash2", &["proj"]);
+        press(&mut s, &[KeyCode::Tab, KeyCode::Char('r')]);
+        type_text(&mut s, "Config");
+        press(&mut s, &[KeyCode::Enter]);
+        assert!(s.input.is_none(), "the rename box closes");
+        assert_eq!(s.favs[0].alias, None, "alias was not applied");
+        assert!(s.notice.as_deref().unwrap().contains("cdx command"));
+        // An ordinary alias still works.
+        press(&mut s, &[KeyCode::Char('r')]);
+        type_text(&mut s, "work");
+        press(&mut s, &[KeyCode::Enter]);
+        assert_eq!(s.favs[0].alias.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn clearing_an_alias_cannot_expose_a_command_named_folder() {
+        let (mut s, root, _store) = setup("clash3", &[]);
+        // Hand-made favourite: a folder called "init", aliased to something harmless.
+        let dir = root.join("init");
+        fs::create_dir(&dir).unwrap();
+        s.favs.push(Favorite { alias: Some("ok".into()), ..Favorite::new(dir) });
+        press(&mut s, &[KeyCode::Tab, KeyCode::Char('r'), KeyCode::Backspace, KeyCode::Backspace, KeyCode::Enter]); // empty alias
+        assert_eq!(s.favs[0].alias.as_deref(), Some("ok"), "refused: the folder name is reserved");
+        assert!(s.notice.is_some());
     }
 
     #[test]

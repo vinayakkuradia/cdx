@@ -4,7 +4,7 @@
 #   curl -fsSL https://github.com/__REPO__/releases/latest/download/install.sh | sh
 #
 # Environment variables:
-#   CDX_VERSION           release tag to install, e.g. v0.1.0   (default: latest)
+#   CDX_VERSION           release tag to install, e.g. vX.Y.Z   (default: latest)
 #   CDX_INSTALL_DIR       where to put cdx-bin                  (default: ~/.local/bin)
 #   CDX_NO_MODIFY_SHELL=1 do not touch any shell config file
 #   CDX_BASE_URL          override the download location (mirrors, testing)

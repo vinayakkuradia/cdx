@@ -42,6 +42,7 @@ pub fn read_dir(path: &Path) -> io::Result<fs::ReadDir> {
     }
 }
 
+/// Whether to re-ask the system after a macOS privacy refusal (the `macos_ask_again` setting).
 static ASK_AGAIN: AtomicBool = AtomicBool::new(true);
 
 /// The `macos_ask_again` setting; on by default, ignored outside macOS.
@@ -49,6 +50,8 @@ pub fn set_ask_again(on: bool) {
     ASK_AGAIN.store(on, Ordering::Relaxed);
 }
 
+/// macOS: if `err` is a privacy refusal for a folder we can re-prompt for, clear the stored
+/// answer for this terminal and return true so the caller retries. Otherwise false.
 #[cfg(target_os = "macos")]
 fn ask_again(path: &Path, err: &io::Error) -> bool {
     use std::process::{Command, Stdio};
@@ -74,6 +77,7 @@ fn ask_again(path: &Path, err: &io::Error) -> bool {
         .unwrap_or(false)
 }
 
+/// Outside macOS there is no such prompt: never retry.
 #[cfg(not(target_os = "macos"))]
 fn ask_again(_path: &Path, _err: &io::Error) -> bool {
     false
@@ -99,15 +103,18 @@ fn tcc_service(path: &Path, home: Option<&Path>) -> Option<&'static str> {
     None
 }
 
+/// Unix: hidden means the name starts with a dot.
 #[cfg(unix)]
 fn is_hidden(name: &std::ffi::OsStr, _entry: &fs::DirEntry, _meta: &fs::Metadata) -> bool {
     use std::os::unix::ffi::OsStrExt;
     name.as_bytes().first() == Some(&b'.')
 }
 
+/// Windows: hidden means the Hidden file attribute is set.
 #[cfg(windows)]
 fn is_hidden(_name: &std::ffi::OsStr, entry: &fs::DirEntry, meta: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
+    /// The Windows attribute bit for hidden files and folders.
     const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
     let attrs = entry
         .metadata()
@@ -116,6 +123,7 @@ fn is_hidden(_name: &std::ffi::OsStr, entry: &fs::DirEntry, meta: &fs::Metadata)
     attrs & FILE_ATTRIBUTE_HIDDEN != 0
 }
 
+/// Other systems: fall back to the dot-prefix rule.
 #[cfg(not(any(unix, windows)))]
 fn is_hidden(name: &std::ffi::OsStr, _entry: &fs::DirEntry, _meta: &fs::Metadata) -> bool {
     name.to_string_lossy().starts_with('.')
@@ -125,6 +133,7 @@ fn is_hidden(name: &std::ffi::OsStr, _entry: &fs::DirEntry, _meta: &fs::Metadata
 #[cfg(windows)]
 pub fn list_drives() -> Vec<PathBuf> {
     extern "system" {
+        /// Windows API: a bit mask of the drive letters in use (bit 0 = A:).
         fn GetLogicalDrives() -> u32;
     }
     // SAFETY: GetLogicalDrives takes no arguments and has no preconditions.
@@ -135,6 +144,7 @@ pub fn list_drives() -> Vec<PathBuf> {
         .collect()
 }
 
+/// There are no drive letters outside Windows.
 #[cfg(not(windows))]
 pub fn list_drives() -> Vec<PathBuf> {
     Vec::new()
@@ -146,6 +156,7 @@ pub fn normalize(path: &Path) -> io::Result<PathBuf> {
     Ok(strip_verbatim(canon))
 }
 
+/// Windows: turn `\\?\C:\x` back into `C:\x` (and `\\?\UNC\s\x` into `\\s\x`).
 #[cfg(windows)]
 fn strip_verbatim(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy();
@@ -158,11 +169,13 @@ fn strip_verbatim(p: PathBuf) -> PathBuf {
     }
 }
 
+/// Elsewhere paths need no cleaning.
 #[cfg(not(windows))]
 fn strip_verbatim(p: PathBuf) -> PathBuf {
     p
 }
 
+/// The home folder (`HOME`, or `USERPROFILE` on Windows) if it exists as a folder.
 pub fn home_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     let var = "USERPROFILE";

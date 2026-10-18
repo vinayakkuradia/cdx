@@ -1,8 +1,25 @@
+//! cdx: a folder browser for the terminal that doubles as an extension of `cd`.
+//!
+//! `cdx-bin` decides what a command line means (`cli`), runs the browser or a
+//! command, and prints at most one thing on stdout for the shell wrapper (see
+//! `init`): the folder to `cd` into, or the marker that hands the arguments to the
+//! shell's own `cd`. All interface output goes to stderr.
+
+/// The interactive folder browser.
 mod browser;
+/// Reading the command line: what is cdx's, what is `cd`'s.
+mod cli;
+/// cdx's own commands and the reserved-name list.
+mod commands;
+/// Settings, key bindings and where files live.
 mod config;
+/// Bookmarked folders and their file format.
 mod favorites;
+/// Folder listing, hidden detection, drives and paths.
 mod fsutil;
+/// The shell wrappers printed by `cdx init`.
 mod init;
+/// Opening a folder in a new terminal window (`-n`).
 mod newwin;
 
 use std::env;
@@ -11,136 +28,102 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use browser::Outcome;
+use cli::Request;
 use config::Config;
 use favorites::Favorite;
 
+/// The text of `--help`, including the command list and where cdx keeps its files.
 fn help() -> String {
     format!(
-        "cdx {version} - navigate to any folder, then jump there
+        "cdx {version} - jump to any folder; works like `cd`, and more
 
 USAGE:
-    cdx [-h] [-n] [PATH]   browse (starting at PATH, or the current folder)
-    cdx [-n] <N|NAME>      speed dial: go straight to favourite N (1-9), or to the
-                           favourite whose name or alias is NAME (no browser)
-    cdx init <SHELL>       print the shell integration ({shells})
-    cdx config <WHAT>      init (write a commented config.ini), path, show, check
-
+    cdx                    open the folder browser (where plain `cd` would go home)
+    cdx <N|NAME>           go to favourite N (1-9), or the favourite whose name or
+                           alias is NAME (case-insensitive). Favourites come first.
+    cdx <anything else>    handed to your shell's `cd`, exactly as typed:
+                           cdx ..    cdx -    cdx ~/src    cdx -L link    cdx /some/dir
+    cdx -b [PATH]          open the browser starting at PATH
+{commands}
 OPTIONS:
+    -b, --browse           open the browser (at PATH if given)
     -h, --hidden           show hidden folders
     -n, --new-window       open the chosen folder in a new terminal window
                            instead of changing this shell's folder
-        --help             show this help
-    -V, --version          show version
+        --help             this help
+    -V, --version          print the version
+    (These options are cdx's own; with them, nothing is passed to `cd`.)
 
 KEYS (the defaults; every one can be changed in config.ini):
-    Up/Down or j/k         move            PageUp/PageDown   jump a page
-    Right/l/Enter          open folder     Left/h/Backspace  go up
-    Space                  select folder and cd there
+    up/k down/j            move            right/l/enter     open folder
+    left/h/backspace       go up           space             choose this folder
+    home/g end/G           first / last    pageup pagedown   scroll
     .                      toggle hidden   ~                 home folder
     /                      filter folders as you type (Enter/Esc keeps the
                            results; Esc again clears them)
-    Esc/q/Ctrl-C           cancel (stay where you are)
-
-FAVOURITES (shown on the left, up to nine):
     b                      bookmark the highlighted folder
     1-9                    jump to that favourite
-    Tab                    edit favourites; press Tab again to finish (saved)
-        Up/Down            move the cursor
-        Space              pick up an item, move it with Up/Down, Space to put down
-        1-9                while holding: send the item to that slot
-        r                  rename (set an alias; empty = folder name)
-        x                  remove          Enter  open it    Esc  undo / back
-    files live in: {datadir}
-    (config.ini = settings and key bindings, favorites.tsv = your favourites)
+    tab                    edit favourites (reorder, rename, remove)
+    esc / q                cancel (changes nothing)
 
 SETUP:
-    bash/zsh    eval \"$(cdx-bin init bash)\"        in ~/.bashrc or ~/.zshrc
-    fish        cdx-bin init fish | source          in ~/.config/fish/config.fish
-    PowerShell  Invoke-Expression (& cdx-bin init powershell | Out-String)   in $PROFILE
-    cmd         cdx-bin init cmd > cdx.cmd          then put cdx.cmd on your PATH
+    A program cannot change its parent shell's folder, so cdx needs a tiny shell
+    function. Add one line to your shell config (the installers do this for you):
+        bash/zsh:    eval \"$(cdx-bin init bash)\"       (or zsh)
+        fish:        cdx-bin init fish | source
+        PowerShell:  Invoke-Expression (& cdx-bin init powershell | Out-String)
+        cmd.exe:     cdx-bin init cmd > cdx.cmd         (put cdx.cmd on your PATH)
+
+    files live in: {datadir}
+    (config.ini = settings and key bindings, favorites.tsv = your favourites)
 ",
         version = env!("CARGO_PKG_VERSION"),
-        shells = init::SHELLS,
+        commands = commands::help_lines(),
         datadir = config::data_dir_from_env()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(no home folder found)".into()),
     )
 }
 
-/// What the command line asked for.
-#[derive(Debug)]
-enum Start {
-    /// Open the browser here.
-    Browse(PathBuf),
-    /// A favourite was named: go straight there, no browser.
-    Jump(PathBuf),
-}
-
-/// A single digit 1-9 names a favourite slot (returned as a 0-based index).
-fn dial_slot(arg: &str) -> Option<usize> {
-    match arg.as_bytes() {
-        [d @ b'1'..=b'9'] => Some((*d - b'1') as usize),
-        _ => None,
-    }
-}
-
-/// A bare word (no slashes, drive colon, or leading `.`/`~`) may be a favourite's name.
-fn is_plain_word(arg: &str) -> bool {
-    !arg.is_empty() && !arg.contains(['/', '\\', ':']) && !arg.starts_with(['.', '~'])
-}
-
-/// Could `arg` be a speed dial rather than a folder path?
-fn is_dial_candidate(arg: &str) -> bool {
-    dial_slot(arg).is_some() || is_plain_word(arg)
-}
-
-fn jump_target(slot: usize, fav: &Favorite) -> Result<Start, String> {
-    if fav.path.is_dir() {
-        Ok(Start::Jump(fav.path.clone()))
+/// The favourite `arg` names, if any: a slot number (1-9) that exists, else a
+/// favourite's alias or folder name (exact match first, then ignoring case).
+/// `Some(Err(..))` means it exists but its folder is gone.
+fn lookup(arg: &str, favs: &[Favorite]) -> Option<Result<PathBuf, String>> {
+    let by_slot = cli::dial_slot(arg).filter(|&slot| slot < favs.len());
+    let idx = by_slot.or_else(|| {
+        if !cli::is_plain_word(arg) {
+            return None;
+        }
+        let lower = arg.to_lowercase();
+        favs.iter()
+            .position(|f| f.label() == arg)
+            .or_else(|| favs.iter().position(|f| f.label().to_lowercase() == lower))
+    })?;
+    let fav = &favs[idx];
+    Some(if fav.path.is_dir() {
+        Ok(fav.path.clone())
     } else {
         Err(format!(
             "favourite {} '{}' no longer exists: {}",
-            slot + 1,
+            idx + 1,
             fav.label(),
             fav.path.display()
         ))
-    }
+    })
 }
 
-/// Turn the PATH argument into a [`Start`]. `1`-`9` and favourite names are speed
-/// dials; anything else is a folder to browse from.
-fn resolve(arg: &str, favs: &[Favorite]) -> Result<Start, String> {
-    if let Some(slot) = dial_slot(arg) {
-        return match favs.get(slot) {
-            Some(fav) => jump_target(slot, fav),
-            None if favs.is_empty() => Err(format!(
-                "no favourite {} (you have none yet; press b inside cdx to add one)",
-                slot + 1
-            )),
-            None => Err(format!(
-                "no favourite {} (you have {}, so slots 1-{})",
-                slot + 1,
-                favs.len(),
-                favs.len()
-            )),
-        };
+/// Tell the shell wrapper to run `cd` with the original arguments.
+fn pass_to_cd() -> ExitCode {
+    if io::stdout().is_terminal() {
+        // Run directly (no wrapper): there is no shell function to hand this to.
+        eprintln!(
+            "cdx: that is for `cd`, which only your shell can run. Set up the shell integration\n     \
+             (`cdx-bin --help`, see SETUP) and `cdx` will pass it on."
+        );
+    } else {
+        println!("{}", cli::PASS_TO_CD);
     }
-    if !is_plain_word(arg) {
-        return Ok(Start::Browse(PathBuf::from(arg)));
-    }
-    let lower = arg.to_lowercase();
-    let hit = favs
-        .iter()
-        .position(|f| f.label() == arg)
-        .or_else(|| favs.iter().position(|f| f.label().to_lowercase() == lower));
-    match hit {
-        Some(i) => jump_target(i, &favs[i]),
-        // Not a favourite: an ordinary folder in the current directory still works.
-        None if Path::new(arg).is_dir() => Ok(Start::Browse(PathBuf::from(arg))),
-        None => Err(format!(
-            "no favourite named '{arg}', and no folder with that name"
-        )),
-    }
+    ExitCode::SUCCESS
 }
 
 /// Hand the chosen folder over: print it for the shell wrapper, or (`new_window` is
@@ -170,188 +153,169 @@ fn deliver(path: &Path, new_window: Option<Option<&str>>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `cdx-bin config <init|path|show|check>`.
-fn config_command(sub: Option<String>, extra: Option<String>) -> ExitCode {
-    match sub.as_deref() {
-        Some("init") => {
-            let force = extra.as_deref() == Some("--force");
-            match Config::write_default_file(force) {
-                Ok((path, true)) => {
-                    println!("wrote {}", path.display());
-                    ExitCode::SUCCESS
-                }
-                Ok((path, false)) => {
-                    eprintln!(
-                        "cdx: {} already exists; left untouched (use `config init --force` to replace it)",
-                        path.display()
-                    );
-                    ExitCode::from(1)
-                }
-                Err(e) => {
-                    eprintln!("cdx: could not write the config file: {e}");
-                    ExitCode::from(2)
-                }
-            }
+/// Load the configuration (and move old favourites over). Problems are returned,
+/// not printed, so that a hand-off to `cd` stays silent.
+fn setup(hidden: bool) -> (Config, Vec<String>) {
+    let (mut cfg, mut warnings) = Config::load();
+    if let Err(e) = cfg.migrate_legacy_favorites() {
+        warnings.push(format!("could not copy your old favourites to the new place: {e}"));
+    }
+    fsutil::set_ask_again(cfg.macos_ask_again);
+    // The -h flag adds to the config; it cannot switch hidden folders off.
+    cfg.ui.show_hidden |= hidden;
+    (cfg, warnings)
+}
+
+/// Print each configuration problem on stderr.
+fn print_warnings(warnings: &[String]) {
+    for w in warnings {
+        eprintln!("cdx: {w}");
+    }
+}
+
+/// Run the browser from `start`, then hand the result over.
+fn browse(start: &Path, cfg: Config, warnings: &[String], new_window: bool) -> ExitCode {
+    let start = match fsutil::normalize(start) {
+        Ok(p) if p.is_dir() => p,
+        Ok(p) => {
+            eprintln!("cdx: not a folder: {}", p.display());
+            return ExitCode::from(2);
         }
-        Some("path") => match Config::load().0.config_path() {
-            Some(p) => {
-                println!("{}", p.display());
-                ExitCode::SUCCESS
-            }
-            None => {
-                eprintln!("cdx: cannot find your home folder");
-                ExitCode::from(2)
-            }
-        },
-        Some("show") => {
-            let (cfg, warns) = Config::load();
-            for w in &warns {
-                eprintln!("cdx: {w}");
-            }
-            print!("{}", cfg.to_ini());
-            ExitCode::SUCCESS
+        Err(e) => {
+            eprintln!("cdx: {}: {e}", start.display());
+            return ExitCode::from(2);
         }
-        Some("check") => {
-            let (cfg, warns) = Config::load();
-            let place = cfg
-                .config_path()
-                .filter(|p| p.is_file())
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "no config.ini, using the defaults".into());
-            if warns.is_empty() {
-                println!("config OK ({place})");
-                ExitCode::SUCCESS
-            } else {
-                for w in &warns {
-                    eprintln!("cdx: {w}");
-                }
-                ExitCode::from(1)
-            }
-        }
-        _ => {
-            eprintln!("cdx: usage: cdx config <init [--force]|path|show|check>");
+    };
+    let notice = (!warnings.is_empty()).then(|| {
+        format!(
+            "config: {} problem{} (listed in your terminal after you leave; or run `cdx-bin config check`)",
+            warnings.len(),
+            if warnings.len() == 1 { "" } else { "s" }
+        )
+    });
+    let command = cfg.new_window_command.clone();
+    match browser::run(start, cfg, notice) {
+        Ok(Outcome::Selected(path)) => deliver(&path, new_window.then_some(command.as_deref())),
+        // Cancelled is a normal, intended outcome: print nothing (so the wrapper
+        // leaves you where you are) and exit successfully.
+        Ok(Outcome::Cancelled) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("cdx: terminal error: {e}");
             ExitCode::from(2)
         }
     }
 }
 
-fn main() -> ExitCode {
-    let mut show_hidden = false;
-    let mut new_window = false;
-    let mut target: Option<String> = None;
-
-    let mut args = env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--hidden" => show_hidden = true,
-            "-n" | "--new-window" => new_window = true,
-            "--help" => {
-                print!("{}", help());
-                return ExitCode::SUCCESS;
-            }
-            "-V" | "--version" => {
-                println!("cdx {}", env!("CARGO_PKG_VERSION"));
-                return ExitCode::SUCCESS;
-            }
-            "config" => return config_command(args.next(), args.next()),
-            "init" => {
-                return match args.next() {
-                    Some(shell) => init::run(&shell),
-                    None => {
-                        eprintln!("cdx: usage: cdx init <{}>", init::SHELLS.replace(", ", "|"));
-                        ExitCode::from(2)
-                    }
-                };
-            }
-            s if s.starts_with('-') && s.len() > 1 => {
-                eprintln!("cdx: unknown option '{s}' (try --help)");
-                return ExitCode::from(2);
-            }
-            _ => target = Some(arg),
-        }
-    }
-
-    let (mut cfg, mut warnings) = Config::load();
-    if let Err(e) = cfg.migrate_legacy_favorites() {
-        warnings.push(format!("could not copy your old favourites to the new place: {e}"));
-    }
-    for w in &warnings {
-        eprintln!("cdx: {w}");
-    }
-    fsutil::set_ask_again(cfg.macos_ask_again);
-    // The -h flag adds to the config; it cannot switch hidden folders off.
-    cfg.ui.show_hidden |= show_hidden;
-
-    let start = match target {
+/// Open the browser (`cdx`, `cdx -b [PATH]`, `cdx -h`, `cdx -n`) and deliver the result.
+fn run_browse(start: Option<String>, hidden: bool, new_window: bool) -> ExitCode {
+    let (cfg, warnings) = setup(hidden);
+    print_warnings(&warnings);
+    let start = match start {
+        Some(s) => PathBuf::from(s),
         None => match env::current_dir() {
-            Ok(p) => Start::Browse(p),
+            Ok(p) => p,
             Err(e) => {
                 eprintln!("cdx: cannot determine the current folder: {e}");
                 return ExitCode::from(2);
             }
         },
-        Some(arg) if is_dial_candidate(&arg) => {
-            let loaded = match cfg.favorites_path() {
-                Some(p) => favorites::load_from(&p),
-                None => Ok(Vec::new()),
-            };
-            let favs = match loaded {
-                Ok(f) => f,
-                // A broken favourites file only matters if a number was typed.
-                Err(e) if dial_slot(&arg).is_some() => {
-                    eprintln!("cdx: could not read favourites: {e}");
-                    return ExitCode::from(2);
-                }
-                Err(_) => Vec::new(),
-            };
-            match resolve(&arg, &favs) {
-                Ok(s) => s,
-                Err(msg) => {
-                    eprintln!("cdx: {msg}");
-                    return ExitCode::from(2);
-                }
+    };
+    browse(&start, cfg, &warnings, new_window)
+}
+
+/// Handle one word: a favourite if it names one; otherwise `cd` gets it, or (with cdx options)
+/// it is taken as a folder to browse or open.
+fn run_target(arg: String, hidden: bool, new_window: bool, else_cd: bool) -> ExitCode {
+    let (cfg, warnings) = setup(hidden);
+
+    let favs = if cli::is_dial_candidate(&arg) {
+        let loaded = match cfg.favorites_path() {
+            Some(p) => favorites::load_from(&p),
+            None => Ok(Vec::new()),
+        };
+        match loaded {
+            Ok(f) => f,
+            // A broken favourites file only matters if a number was typed.
+            Err(e) if cli::dial_slot(&arg).is_some() => {
+                print_warnings(&warnings);
+                eprintln!("cdx: could not read favourites: {e}");
+                return ExitCode::from(2);
             }
+            Err(_) => Vec::new(),
         }
-        Some(arg) => Start::Browse(PathBuf::from(arg)),
+    } else {
+        Vec::new()
     };
 
-    let chosen = match start {
-        Start::Jump(path) => path,
-        Start::Browse(start) => {
-            let start = match fsutil::normalize(&start) {
-                Ok(p) if p.is_dir() => p,
-                Ok(p) => {
-                    eprintln!("cdx: not a folder: {}", p.display());
-                    return ExitCode::from(2);
+    let window = new_window.then_some(cfg.new_window_command.as_deref());
+    match lookup(&arg, &favs) {
+        Some(Ok(path)) => {
+            print_warnings(&warnings);
+            deliver(&path, window)
+        }
+        Some(Err(msg)) => {
+            print_warnings(&warnings);
+            eprintln!("cdx: {msg}");
+            ExitCode::from(2)
+        }
+        // Not a favourite, and no cdx option was used: plain `cd` usage.
+        None if else_cd => pass_to_cd(),
+        // Not a favourite, but cdx's own options were used: take it as a folder.
+        None => {
+            print_warnings(&warnings);
+            let path = Path::new(&arg);
+            if !path.is_dir() {
+                eprintln!("cdx: no favourite or folder named '{arg}'");
+                return ExitCode::from(2);
+            }
+            if new_window {
+                match fsutil::normalize(path) {
+                    Ok(p) => deliver(&p, window),
+                    Err(e) => {
+                        eprintln!("cdx: {arg}: {e}");
+                        ExitCode::from(2)
+                    }
                 }
-                Err(e) => {
-                    eprintln!("cdx: {}: {e}", start.display());
-                    return ExitCode::from(2);
-                }
-            };
-            let notice = (!warnings.is_empty()).then(|| {
-                format!(
-                    "config: {} problem{} (listed in your terminal after you leave; or run `cdx-bin config check`)",
-                    warnings.len(),
-                    if warnings.len() == 1 { "" } else { "s" }
-                )
-            });
-            match browser::run(start, cfg.clone(), notice) {
-                Ok(Outcome::Selected(path)) => path,
-                // Cancelled is a normal, intended outcome: print nothing (so the
-                // wrapper leaves you where you are) and exit successfully.
-                Ok(Outcome::Cancelled) => return ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("cdx: terminal error: {e}");
-                    return ExitCode::from(2);
-                }
+            } else {
+                browse(path, cfg, &warnings, false)
             }
         }
-    };
-    deliver(
-        &chosen,
-        new_window.then(|| cfg.new_window_command.as_deref()),
-    )
+    }
+}
+
+/// Read the command line, decide what it asks for, and do it.
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    match cli::parse(&args) {
+        Request::Help => {
+            print!("{}", help());
+            ExitCode::SUCCESS
+        }
+        Request::Version => {
+            println!("cdx {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Request::Command(name, rest) => match commands::find(&name) {
+            Some(command) => (command.run)(&rest),
+            None => ExitCode::from(2),
+        },
+        Request::PassToCd => pass_to_cd(),
+        Request::Error(msg) => {
+            eprintln!("cdx: {msg}");
+            ExitCode::from(2)
+        }
+        Request::Browse {
+            start,
+            hidden,
+            new_window,
+        } => run_browse(start, hidden, new_window),
+        Request::Target {
+            arg,
+            hidden,
+            new_window,
+            else_cd,
+        } => run_target(arg, hidden, new_window, else_cd),
+    }
 }
 
 #[cfg(test)]
@@ -374,57 +338,69 @@ mod tests {
     }
 
     #[test]
-    fn a_digit_jumps_to_that_slot() {
+    fn a_digit_names_that_slot() {
         let root = scratch("digit");
         let (a, b) = (root.join("a"), root.join("b"));
         fs::create_dir_all(&a).unwrap();
         fs::create_dir_all(&b).unwrap();
         let favs = vec![fav(a, None), fav(b.clone(), None)];
-        assert!(matches!(resolve("2", &favs), Ok(Start::Jump(p)) if p == b));
+        assert_eq!(lookup("2", &favs), Some(Ok(b)));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn a_missing_slot_is_an_error_that_says_how_many_exist() {
-        let root = scratch("slot");
-        let favs = vec![fav(root.clone(), None)];
-        let msg = resolve("5", &favs).unwrap_err();
-        assert!(msg.contains("no favourite 5") && msg.contains("1-1"), "{msg}");
-        let msg = resolve("1", &[]).unwrap_err();
-        assert!(msg.contains("none yet"), "{msg}");
+    fn a_missing_slot_or_name_is_not_a_favourite_so_cd_gets_it() {
+        let root = scratch("miss");
+        let favs = vec![fav(root.clone(), Some("work"))];
+        assert_eq!(lookup("5", &favs), None);
+        assert_eq!(lookup("1", &[]), None);
+        assert_eq!(lookup("nope", &favs), None);
+        assert_eq!(lookup("../work", &favs), None, "paths are never looked up");
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn an_alias_or_folder_name_matches_ignoring_case() {
+    fn an_alias_or_folder_name_matches_exactly_first_then_ignoring_case() {
         let root = scratch("alias");
-        let work = root.join("projects");
+        let (work, other) = (root.join("projects"), root.join("other"));
         fs::create_dir_all(&work).unwrap();
-        let favs = vec![fav(work.clone(), Some("Work"))];
-        assert!(matches!(resolve("Work", &favs), Ok(Start::Jump(p)) if p == work));
-        assert!(matches!(resolve("work", &favs), Ok(Start::Jump(p)) if p == work));
+        fs::create_dir_all(&other).unwrap();
+        let favs = vec![fav(other.clone(), Some("work")), fav(work.clone(), Some("Work"))];
+        assert_eq!(lookup("Work", &favs), Some(Ok(work.clone())), "exact beats case-insensitive");
+        assert_eq!(lookup("work", &favs), Some(Ok(other)));
+        assert!(lookup("WORK", &favs).is_some());
         let unnamed = vec![fav(work.clone(), None)];
-        assert!(matches!(resolve("projects", &unnamed), Ok(Start::Jump(p)) if p == work));
+        assert_eq!(lookup("projects", &unnamed), Some(Ok(work)));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn an_unknown_name_is_an_error_but_paths_still_browse() {
-        let msg = resolve("definitely-not-here-xyz", &[]).unwrap_err();
-        assert!(msg.contains("no favourite named"), "{msg}");
-        assert!(matches!(resolve("./x", &[]), Ok(Start::Browse(_))));
-        assert!(matches!(resolve("../x", &[]), Ok(Start::Browse(_))));
-        assert!(matches!(resolve("/tmp", &[]), Ok(Start::Browse(_))));
-        assert!(matches!(resolve("~", &[]), Ok(Start::Browse(_))));
+    fn a_slot_wins_over_a_favourite_whose_name_is_a_digit() {
+        let root = scratch("slotwins");
+        let (a, b) = (root.join("a"), root.join("b"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        let favs = vec![fav(a.clone(), None), fav(b, Some("1"))];
+        assert_eq!(lookup("1", &favs), Some(Ok(a)));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn a_deleted_favourite_is_reported() {
+    fn a_deleted_favourite_is_reported_rather_than_passed_to_cd() {
         let root = scratch("gone");
-        let gone = root.join("gone");
-        let favs = vec![fav(gone, Some("old"))];
-        let msg = resolve("1", &favs).unwrap_err();
+        let favs = vec![fav(root.join("gone"), Some("old"))];
+        let msg = lookup("1", &favs).unwrap().unwrap_err();
         assert!(msg.contains("no longer exists") && msg.contains("'old'"), "{msg}");
+        assert!(lookup("old", &favs).unwrap().is_err());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_help_mentions_the_cd_behaviour_and_every_command() {
+        let h = help();
+        assert!(h.contains("handed to your shell's `cd`"));
+        for name in commands::names() {
+            assert!(h.contains(&format!("cdx {name}")), "{name}");
+        }
     }
 }

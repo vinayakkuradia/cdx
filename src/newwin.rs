@@ -74,6 +74,7 @@ fn spawn(cmd: &mut Command) -> io::Result<()> {
     cmd.spawn().map(|_| ())
 }
 
+/// macOS: open Terminal (or iTerm2 when that is what you are in) at `dir`.
 #[cfg(target_os = "macos")]
 fn platform_open(dir: &Path) -> io::Result<()> {
     // Use the same terminal app you are in now, when we know it.
@@ -96,6 +97,7 @@ fn platform_open(dir: &Path) -> io::Result<()> {
     }
 }
 
+/// Windows: Windows Terminal if installed, otherwise a plain `cmd` window.
 #[cfg(windows)]
 fn platform_open(dir: &Path) -> io::Result<()> {
     // Windows Terminal if it is installed, otherwise a plain console window.
@@ -111,6 +113,7 @@ fn platform_open(dir: &Path) -> io::Result<()> {
     )
 }
 
+/// Linux and other Unix: the first installed terminal from a list of common ones.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn platform_open(dir: &Path) -> io::Result<()> {
     use std::ffi::OsString;
@@ -161,6 +164,7 @@ fn platform_open(dir: &Path) -> io::Result<()> {
     )))
 }
 
+/// Other systems cannot open a window.
 #[cfg(not(any(unix, windows)))]
 fn platform_open(_dir: &Path) -> io::Result<()> {
     Err(io::Error::new(
