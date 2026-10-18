@@ -48,9 +48,12 @@ enum Kind {
     Folder,
     /// A Windows drive root such as `C:\`, shown in the drive list.
     Drive,
+    /// A file (listed only while files are shown). cdx cannot enter a file, so
+    /// choosing one means choosing the folder it is in.
+    File,
 }
 
-/// One row of the folder list (the "." row, a folder, or a drive).
+/// One row of the folder list (the "." row, a folder, a file, or a drive).
 #[derive(Clone)]
 struct Entry {
     /// Text shown on screen: the folder name, `.`, or the drive root.
@@ -86,6 +89,8 @@ struct State {
     loc: Location,
     /// Whether hidden folders are listed; starts from the config, toggled at runtime.
     show_hidden: bool,
+    /// Whether files are listed next to folders; starts from the config, toggled at runtime.
+    show_files: bool,
     /// The loaded configuration: key bindings, limits and switches.
     cfg: Config,
     /// Everything in the folder; `entries` is the part that matches `filter`.
@@ -197,12 +202,26 @@ pub fn run(start: PathBuf, cfg: Config, startup_notice: Option<String>) -> io::R
     Ok(outcome)
 }
 
+/// The folder a row stands for: itself for folders, drives and ".", and the folder
+/// it is in for a file (cdx never acts on a file itself).
+fn folder_of(entry: &Entry) -> PathBuf {
+    match entry.kind {
+        Kind::File => entry
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| entry.path.clone()),
+        _ => entry.path.clone(),
+    }
+}
+
 impl State {
     /// A browser at `start` with the given favourites, save location and settings.
     fn new(start: PathBuf, favs: Vec<Favorite>, store: Option<PathBuf>, cfg: Config) -> Self {
         let mut state = State {
             loc: Location::Dir(start),
             show_hidden: cfg.ui.show_hidden,
+            show_files: cfg.ui.show_files,
             cfg,
             all: Vec::new(),
             entries: Vec::new(),
@@ -249,13 +268,18 @@ impl State {
                     path: dir.clone(),
                     kind: Kind::Here,
                 });
-                match fsutil::list_subdirs(dir, self.show_hidden) {
-                    Ok(subdirs) => {
-                        for (name, path) in subdirs {
+                let opts = fsutil::ListOptions {
+                    show_hidden: self.show_hidden,
+                    show_files: self.show_files,
+                    dot_is_hidden: self.cfg.ui.windows_dot_is_hidden,
+                };
+                match fsutil::list_dir(dir, opts) {
+                    Ok(items) => {
+                        for item in items {
                             entries.push(Entry {
-                                label: name,
-                                path,
-                                kind: Kind::Folder,
+                                label: item.name,
+                                path: item.path,
+                                kind: if item.is_dir { Kind::Folder } else { Kind::File },
                             });
                         }
                     }
@@ -303,10 +327,18 @@ impl State {
     }
 
     /// The outcome of choosing the highlighted row (None if the list is empty).
+    /// A file stands for the folder it is in.
     fn select(&self) -> Option<Outcome> {
         self.entries
             .get(self.cursor)
-            .map(|e| Outcome::Selected(e.path.clone()))
+            .map(|e| Outcome::Selected(folder_of(e)))
+    }
+
+    /// Is the highlighted row a file?
+    fn highlighted_is_file(&self) -> bool {
+        self.entries
+            .get(self.cursor)
+            .is_some_and(|e| e.kind == Kind::File)
     }
 
     /// Open the highlighted folder; "." does nothing, and a refusal becomes a notice.
@@ -314,7 +346,7 @@ impl State {
         let Some(entry) = self.entries.get(self.cursor) else {
             return;
         };
-        if entry.kind == Kind::Here {
+        if matches!(entry.kind, Kind::Here | Kind::File) {
             return;
         }
         let path = entry.path.clone();
@@ -346,10 +378,17 @@ impl State {
         self.reload(Some(&from));
     }
 
-    /// Show or hide hidden folders, keeping the cursor on the same row if it survives.
+    /// Show or hide hidden folders and files, keeping the cursor on the same row if it survives.
     fn toggle_hidden(&mut self) {
         let focus = self.entries.get(self.cursor).map(|e| e.path.clone());
         self.show_hidden = !self.show_hidden;
+        self.reload(focus.as_deref());
+    }
+
+    /// Show or hide files, keeping the cursor on the same row if it survives.
+    fn toggle_files(&mut self) {
+        let focus = self.entries.get(self.cursor).map(|e| e.path.clone());
+        self.show_files = !self.show_files;
         self.reload(focus.as_deref());
     }
 
@@ -417,9 +456,9 @@ impl State {
     }
 
     /// `b`: bookmark the highlighted item. On the "." row that is the folder we
-    /// are standing in.
+    /// are standing in; on a file it is the folder the file is in.
     fn bookmark_highlighted(&mut self) {
-        let Some(path) = self.entries.get(self.cursor).map(|e| e.path.clone()) else {
+        let Some(path) = self.entries.get(self.cursor).map(folder_of) else {
             self.notice = Some("nothing to bookmark here".into());
             return;
         };
@@ -670,11 +709,14 @@ impl State {
             Action::PageDown => self.move_by(self.page as isize),
             Action::Top => self.cursor = 0,
             Action::Bottom => self.cursor = self.entries.len().saturating_sub(1),
+            // A file cannot be opened: opening one chooses the folder it is in.
+            Action::Open if self.highlighted_is_file() => return self.select(),
             Action::Open => self.descend(),
             Action::Parent => self.ascend(),
             Action::Select => return self.select(),
             Action::Bookmark => self.bookmark_highlighted(),
             Action::ToggleHidden => self.toggle_hidden(),
+            Action::ToggleFiles => self.toggle_files(),
             Action::Home => self.go_home(),
             Action::ToggleFavorites => self.toggle_mode(),
             Action::PickUp | Action::Rename | Action::Remove | Action::Back => {}
@@ -874,13 +916,18 @@ impl State {
             Location::Drives => ("Drives".to_string(), self.entries.len(), self.all.len()),
         };
         let hidden = if self.show_hidden { "shown" } else { "off" };
-        let sub = if self.filter.is_empty() {
+        let files = self.entries.iter().filter(|e| e.kind == Kind::File).count();
+        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let sub = if !self.filter.is_empty() {
+            format!("{count} of {total}  ·  hidden: {hidden}")
+        } else if self.show_files {
             format!(
-                "{count} item{}  ·  hidden: {hidden}",
-                if count == 1 { "" } else { "s" }
+                "{}, {}  ·  hidden: {hidden}",
+                plural(count - files, "folder", "folders"),
+                plural(files, "file", "files")
             )
         } else {
-            format!("{count} of {total}  ·  hidden: {hidden}")
+            format!("{}  ·  hidden: {hidden}", plural(count, "item", "items"))
         };
         put(
             out,
@@ -899,13 +946,13 @@ impl State {
             let label = match entry.kind {
                 Kind::Here => ".  (this folder)".to_string(),
                 Kind::Folder => format!("{}/", entry.label),
-                Kind::Drive => entry.label.clone(),
+                Kind::Drive | Kind::File => entry.label.clone(),
             };
             let selected = idx == self.cursor;
             let line = fit(&format!("{} {}", if selected { "▸" } else { " " }, label), rw);
             let look = if selected && !in_favs {
                 Look::Cursor
-            } else if selected || entry.kind == Kind::Here || in_favs {
+            } else if selected || matches!(entry.kind, Kind::Here | Kind::File) || in_favs {
                 Look::Dim
             } else {
                 Look::Plain
@@ -925,12 +972,17 @@ impl State {
             );
             put(out, 0, h.saturating_sub(2), &fit_left(&prompt, w), Look::Accent)?;
         } else if self.filtering {
-            let prompt = format!("/{}_", self.filter);
+            let prompt = format!("filter: {}_", self.filter);
             put(out, 0, h.saturating_sub(2), &fit_left(&prompt, w), Look::Accent)?;
         } else if let Some(n) = &self.notice {
             put(out, 0, h.saturating_sub(2), &fit(n, w), Look::Notice)?;
         } else if !self.filter.is_empty() {
-            let line = format!("filter: {}   (/ edit   esc clear)", self.filter);
+            let line = format!(
+                "filter: {}   ({} edit   {} clear)",
+                self.filter,
+                self.nav_key(Action::Filter),
+                self.nav_key(Action::Cancel)
+            );
             put(out, 0, h.saturating_sub(2), &fit(&line, w), Look::Accent)?;
         }
 
@@ -940,11 +992,12 @@ impl State {
                 "type to filter   ↑↓ move   enter/esc done (results stay)   ctrl-u clear".into()
             }
             (_, Mode::Nav, _) => format!(
-                "{}{} move   {} select   {} filter   {} bookmark   1-9 jump   {} favs   {} hidden   {} cancel",
+                "{}{} move   {} select   {} filter   {} files   {} bookmark   1-9 jump   {} favs   {} hidden   {} cancel",
                 self.nav_key(Action::MoveUp),
                 self.nav_key(Action::MoveDown),
                 self.nav_key(Action::Select),
                 self.nav_key(Action::Filter),
+                self.nav_key(Action::ToggleFiles),
                 self.nav_key(Action::Bookmark),
                 self.nav_key(Action::ToggleFavorites),
                 self.nav_key(Action::ToggleHidden),
@@ -1167,7 +1220,7 @@ mod tests {
     fn slash_filters_as_you_type() {
         let (mut s, _root) = filter_setup("flt1");
         assert_eq!(labels(&s), [".", "alpha", "alpine", "beta", "Gamma"]);
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         assert!(s.filtering);
         type_text(&mut s, "al");
         assert_eq!(labels(&s), [".", "alpha", "alpine"]);
@@ -1182,7 +1235,7 @@ mod tests {
     #[test]
     fn the_filter_ignores_case() {
         let (mut s, _root) = filter_setup("flt2");
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "GAM");
         assert_eq!(labels(&s), [".", "Gamma"]);
     }
@@ -1190,7 +1243,7 @@ mod tests {
     #[test]
     fn esc_closes_filter_mode_but_leaves_the_results_filtered() {
         let (mut s, _root) = filter_setup("flt3");
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "al");
         let out = s.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(out.is_none(), "Esc in filter mode never cancels cdx");
@@ -1204,7 +1257,7 @@ mod tests {
     #[test]
     fn enter_also_closes_filter_mode_keeping_results() {
         let (mut s, _root) = filter_setup("flt4");
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "be");
         press(&mut s, &[KeyCode::Enter]);
         assert!(!s.filtering);
@@ -1214,7 +1267,7 @@ mod tests {
     #[test]
     fn esc_in_navigation_clears_a_left_over_filter_before_cancelling() {
         let (mut s, _root) = filter_setup("flt5");
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "al");
         press(&mut s, &[KeyCode::Esc]); // close filter mode
         let out = s.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -1229,12 +1282,12 @@ mod tests {
     #[test]
     fn shortcut_keys_are_just_text_while_filtering() {
         let (mut s, _root) = filter_setup("flt6");
-        press(&mut s, &[KeyCode::Char('/')]);
-        type_text(&mut s, "b1q.~j");
+        press(&mut s, &[KeyCode::Char('0')]);
+        type_text(&mut s, "b1q.~jf0");
         assert!(s.filtering);
         assert!(s.favs.is_empty(), "b did not bookmark");
         assert_eq!(s.mode, Mode::Nav);
-        assert_eq!(s.filter, "b1q.~j");
+        assert_eq!(s.filter, "b1q.~jf0");
         assert!(!s.show_hidden);
         assert_eq!(labels(&s), ["."], "nothing matches, only the . row remains");
     }
@@ -1242,7 +1295,7 @@ mod tests {
     #[test]
     fn arrows_move_through_the_matches_while_typing() {
         let (mut s, _root) = filter_setup("flt7");
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "al");
         press(&mut s, &[KeyCode::Down]);
         assert_eq!(s.entries[s.cursor].label, "alpine");
@@ -1252,12 +1305,12 @@ mod tests {
     #[test]
     fn moving_to_another_folder_drops_the_filter() {
         let (mut s, root) = filter_setup("flt8");
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "al");
         press(&mut s, &[KeyCode::Enter, KeyCode::Enter]); // close box, open "alpha"
         assert_eq!(here(&s), root.join("alpha"));
         assert!(s.filter.is_empty());
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "zz");
         press(&mut s, &[KeyCode::Enter, KeyCode::Left]);
         assert_eq!(here(&s), root);
@@ -1268,7 +1321,7 @@ mod tests {
     fn toggling_hidden_keeps_the_filter() {
         let (mut s, root) = filter_setup("flt9");
         fs::create_dir(root.join(".alhidden")).unwrap();
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "al");
         press(&mut s, &[KeyCode::Enter, KeyCode::Char('.')]);
         assert_eq!(labels(&s), [".", ".alhidden", "alpha", "alpine"]);
@@ -1325,6 +1378,107 @@ mod tests {
         assert!(s.notice.is_some());
     }
 
+    fn files_setup(tag: &str, cfg: Config) -> (State, PathBuf) {
+        let (mut s, root, _store) = setup_with(tag, &[], cfg);
+        fs::create_dir(root.join("alpha")).unwrap();
+        fs::create_dir(root.join("beta")).unwrap();
+        fs::write(root.join("notes.txt"), "x").unwrap();
+        fs::write(root.join("Zed.md"), "x").unwrap();
+        s.reload(None);
+        (s, root)
+    }
+
+    fn select_outcome(s: &mut State, key: KeyCode) -> Option<PathBuf> {
+        match s.on_key(KeyEvent::new(key, KeyModifiers::NONE)) {
+            Some(Outcome::Selected(p)) => Some(p),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn files_are_hidden_until_f_is_pressed_and_come_after_the_folders() {
+        let (mut s, _root) = files_setup("files1", Config::default());
+        assert_eq!(labels(&s), [".", "alpha", "beta"]);
+        press(&mut s, &[KeyCode::Char('f')]);
+        assert_eq!(labels(&s), [".", "alpha", "beta", "notes.txt", "Zed.md"]);
+        press(&mut s, &[KeyCode::Char('f')]);
+        assert_eq!(labels(&s), [".", "alpha", "beta"], "f again hides them");
+    }
+
+    #[test]
+    fn toggling_files_keeps_the_cursor_on_the_same_row() {
+        let (mut s, _root) = files_setup("files2", Config::default());
+        press(&mut s, &[KeyCode::Char('j')]); // beta
+        press(&mut s, &[KeyCode::Char('f')]);
+        assert_eq!(s.entries[s.cursor].label, "beta");
+    }
+
+    #[test]
+    fn choosing_a_file_chooses_the_folder_it_is_in() {
+        let (mut s, root) = files_setup("files3", Config::default());
+        press(&mut s, &[KeyCode::Char('f'), KeyCode::End]);
+        assert_eq!(s.entries[s.cursor].label, "Zed.md");
+        assert_eq!(select_outcome(&mut s, KeyCode::Char(' ')), Some(root));
+    }
+
+    #[test]
+    fn opening_a_file_also_chooses_its_folder_instead_of_doing_nothing() {
+        let (mut s, root) = files_setup("files4", Config::default());
+        press(&mut s, &[KeyCode::Char('f'), KeyCode::End]);
+        assert_eq!(select_outcome(&mut s, KeyCode::Enter), Some(root.clone()));
+        let mut t = files_setup("files4b", Config::default()).0;
+        press(&mut t, &[KeyCode::Char('f'), KeyCode::End]);
+        assert!(select_outcome(&mut t, KeyCode::Right).is_some());
+        // Folders still open normally.
+        let (mut u, root_u) = files_setup("files4c", Config::default());
+        assert!(u.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).is_none());
+        assert_eq!(here(&u), root_u.join("alpha"));
+    }
+
+    #[test]
+    fn bookmarking_a_file_bookmarks_its_folder() {
+        let (mut s, root) = files_setup("files5", Config::default());
+        press(&mut s, &[KeyCode::Char('f'), KeyCode::End, KeyCode::Char('b')]);
+        assert_eq!(s.favs.len(), 1);
+        assert_eq!(s.favs[0].path, root);
+    }
+
+    #[test]
+    fn the_filter_covers_files_too() {
+        let (mut s, _root) = files_setup("files6", Config::default());
+        press(&mut s, &[KeyCode::Char('f'), KeyCode::Char('0')]);
+        type_text(&mut s, "z");
+        assert_eq!(labels(&s), [".", "Zed.md"]);
+    }
+
+    #[test]
+    fn show_files_in_the_config_applies_from_the_start() {
+        let (s, _root) = files_setup("files7", cfg_from("[ui]\nshow_files = true\n"));
+        assert_eq!(labels(&s), [".", "alpha", "beta", "notes.txt", "Zed.md"]);
+    }
+
+    #[test]
+    fn the_hidden_key_applies_to_files_as_well() {
+        let (mut s, root) = files_setup("files8", Config::default());
+        fs::write(root.join(".env"), "x").unwrap();
+        s.reload(None);
+        press(&mut s, &[KeyCode::Char('f')]);
+        assert!(!labels(&s).contains(&".env".to_string()));
+        press(&mut s, &[KeyCode::Char('.')]);
+        assert!(labels(&s).contains(&".env".to_string()));
+    }
+
+    #[test]
+    fn zero_opens_the_filter_and_slash_no_longer_does() {
+        let (mut s, _root) = filter_setup("zero");
+        press(&mut s, &[KeyCode::Char('/')]);
+        assert!(!s.filtering);
+        press(&mut s, &[KeyCode::Char('0')]);
+        assert!(s.filtering);
+        type_text(&mut s, "/0");
+        assert_eq!(s.filter, "/0", "both are ordinary text inside the box");
+    }
+
     #[test]
     fn rebinding_a_key_changes_what_it_does() {
         let cfg = cfg_from("[keys]\nbookmark = B\nfilter = ctrl-f\nmove_down = s\nmove_up = w\n");
@@ -1342,7 +1496,7 @@ mod tests {
         s.on_key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT));
         assert_eq!(s.favs[0].path, root.join("one"));
         // And the filter now opens on Ctrl-F, not on /.
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         assert!(!s.filtering);
         s.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
         assert!(s.filtering);
@@ -1395,7 +1549,7 @@ mod tests {
         fs::create_dir(root.join("Gamma")).unwrap();
         fs::create_dir(root.join("gamut")).unwrap();
         s.reload(None);
-        press(&mut s, &[KeyCode::Char('/')]);
+        press(&mut s, &[KeyCode::Char('0')]);
         type_text(&mut s, "Gam");
         assert_eq!(labels(&s), [".", "Gamma"]);
     }

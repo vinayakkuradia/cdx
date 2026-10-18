@@ -59,8 +59,10 @@ KEYS (the defaults; every one can be changed in config.ini):
     left/h/backspace       go up           space             choose this folder
     home/g end/G           first / last    pageup pagedown   scroll
     .                      toggle hidden   ~                 home folder
-    /                      filter folders as you type (Enter/Esc keeps the
-                           results; Esc again clears them)
+    f                      show/hide files (cdx cannot enter a file: choosing one
+                           goes to the folder it is in)
+    0                      filter as you type (Enter/Esc keeps the results;
+                           Esc again clears them)
     b                      bookmark the highlighted folder
     1-9                    jump to that favourite
     tab                    edit favourites (reorder, rename, remove)

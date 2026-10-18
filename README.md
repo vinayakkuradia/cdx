@@ -6,11 +6,12 @@ folder. Type `cdx ..` or `cdx -` and it is just `cd`.
 
 - Windows, macOS, Linux
 - Single native binary (~0.5 MB), no runtime, no background service, no GUI
-- Hidden folders stay out of the way unless you ask: `cdx -h`
+- Hidden folders stay out of the way unless you ask: `cdx -h` (or the `.` key)
+- Files can be shown with `f`; cdx cannot enter a file, so choosing one takes you to its folder
 - Up to nine **favourites**, one keypress away: `b` to bookmark the highlighted folder, `1`-`9` to jump
 - **Speed dial** from the shell: `cdx 1` or `cdx work` goes straight to a favourite
 - **Still `cd`**: anything that is not cdx's own is handed to your shell's `cd` unchanged
-- **Filter** as you type: press `/`
+- **Filter** as you type: press `0`
 - `cdx -n` opens the folder in a **new terminal window** instead
 
 ## Install
@@ -140,22 +141,38 @@ and teaches the shell wrappers to pass it through, with no other change.
 | ← / `h` / Backspace        | go up (on Windows, past `C:\` to the drive list) |
 | **Space**                  | select the highlighted folder and `cd` there |
 | `.` row, then Space        | select the folder you are currently in |
-| `.`                        | toggle hidden folders               |
+| `.`                        | toggle hidden folders and files     |
+| `f`                        | show / hide files (see below)       |
 | `~`                        | jump to your home folder            |
 | PageUp / PageDown, `g` / `G` | page, top, bottom                 |
-| `/`                        | filter the list (see below)         |
+| `0`                        | filter the list (see below)         |
 | `b`, `1`-`9`, `Tab`        | favourites (see below)              |
 | Esc / `q` / Ctrl-C         | cancel, you stay where you were     |
 
-"Hidden" means dot-folders on macOS/Linux and the Hidden attribute on Windows.
+"Hidden" means names starting with a dot on every system, plus, on Windows, anything with
+the Hidden attribute. (The dot rule on Windows can be switched off in `config.ini` with
+`windows_dot_is_hidden = false`; it is a setting only, there is no key for it.)
+
+## Files
+
+Only folders are listed at first. Press `f` to list files too (or set `show_files = true`
+in `config.ini`): folders come first, then files, dimmed, and the `.` key hides or shows
+hidden files along with hidden folders.
+
+cdx cannot enter a file or work on one, so wherever it would act on a file it uses the
+folder the file is in:
+
+- **Space** (select) or **Enter / →** (open) on a file `cd`s to the folder it is in.
+- `b` on a file bookmarks that folder.
+- With `-n`, the folder opens in a new window.
 
 Every key above can be rebound (see [Configuration](#configuration)). Only `1`-`9`
 (favourites) and Ctrl-C (quit) are fixed.
 
 ## Filtering
 
-Press `/` and start typing: the list narrows to folders whose name contains what you
-typed (case-insensitive). The `.` row stays so you can still select the current folder.
+Press `0` and start typing: the list narrows to the folders (and files, when shown) whose
+name contains what you typed (case-insensitive by default). The `.` row stays so you can still select the current folder.
 
 | Key (filter box open) | Action |
 |-----------------------|--------|
@@ -165,10 +182,10 @@ typed (case-insensitive). The `.` row stays so you can still select the current 
 | Esc / Enter           | close the box; **the list stays filtered** |
 | Ctrl-C                | quit cdx |
 
-After the box is closed, the normal keys work on the filtered list. `/` edits the filter
+After the box is closed, the normal keys work on the filtered list. `0` edits the filter
 again; Esc (with the box closed) clears it, and a second Esc cancels cdx as usual.
 Opening another folder, going up, `~` and the `1`-`9` jumps also clear the filter;
-toggling hidden folders keeps it.
+toggling hidden folders or files keeps it.
 
 ## Speed dial and new windows
 
@@ -266,6 +283,10 @@ favorites_file = favorites.tsv
 [ui]
 # same as always passing -h
 show_hidden = false
+# list files as well as folders from the start
+show_files = false
+# Windows only: names starting with a dot count as hidden (no key for this)
+windows_dot_is_hidden = true
 filter_case_sensitive = false
 # narrower windows hide the favourites panel
 min_width_for_favorites = 48
@@ -310,9 +331,10 @@ whatever you configure.
 | `select` | `space` | | `back` | `esc` |
 | `cancel` | `esc q` | | `cancel` | `q` |
 | `toggle_hidden` | `.` | | `toggle_favorites` | `tab backtab` |
+| `toggle_files` | `f` | | | |
 | `home` | `~` | | | |
 | `bookmark` | `b` | | | |
-| `filter` | `/` | | | |
+| `filter` | `0` | | | |
 | `toggle_favorites` | `tab backtab` | | | |
 
 Not configurable, on purpose: `1`-`9`, Ctrl-C, and the keys inside the filter box and the

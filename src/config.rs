@@ -105,6 +105,8 @@ pub enum Action {
     Cancel,
     /// Show or hide hidden folders.
     ToggleHidden,
+    /// Show or hide files (cdx cannot enter a file; choosing one goes to its folder).
+    ToggleFiles,
     /// Jump to the home folder.
     Home,
     /// Bookmark the highlighted folder as a favourite.
@@ -138,6 +140,7 @@ impl Action {
         Action::Select,
         Action::Cancel,
         Action::ToggleHidden,
+        Action::ToggleFiles,
         Action::Home,
         Action::Bookmark,
         Action::Filter,
@@ -162,6 +165,7 @@ impl Action {
             Action::Select => "select",
             Action::Cancel => "cancel",
             Action::ToggleHidden => "toggle_hidden",
+            Action::ToggleFiles => "toggle_files",
             Action::Home => "home",
             Action::Bookmark => "bookmark",
             Action::Filter => "filter",
@@ -194,7 +198,8 @@ impl Action {
             Action::Parent => "go up one folder",
             Action::Select => "choose the highlighted folder (cd there)",
             Action::Cancel => "leave without changing folder (clears a filter first)",
-            Action::ToggleHidden => "show or hide hidden folders",
+            Action::ToggleHidden => "show or hide hidden folders and files",
+            Action::ToggleFiles => "show or hide files (choosing a file goes to the folder it is in)",
             Action::Home => "jump to your home folder",
             Action::Bookmark => "bookmark the highlighted folder",
             Action::Filter => "start filtering by name",
@@ -220,6 +225,7 @@ pub const BROWSE_ACTIONS: &[Action] = &[
     Action::Select,
     Action::Cancel,
     Action::ToggleHidden,
+    Action::ToggleFiles,
     Action::Home,
     Action::Bookmark,
     Action::Filter,
@@ -487,9 +493,10 @@ impl KeyMap {
             (Action::Select, "space"),
             (Action::Cancel, "esc q"),
             (Action::ToggleHidden, "."),
+            (Action::ToggleFiles, "f"),
             (Action::Home, "~"),
             (Action::Bookmark, "b"),
-            (Action::Filter, "/"),
+            (Action::Filter, "0"),
             (Action::ToggleFavorites, "tab backtab"),
         ])
     }
@@ -517,6 +524,11 @@ impl KeyMap {
 pub struct Ui {
     /// Show hidden folders from the start (the -h flag does the same).
     pub show_hidden: bool,
+    /// List files as well as folders from the start (the `toggle_files` key flips it).
+    pub show_files: bool,
+    /// Windows only: treat names starting with `.` as hidden, like on macOS and Linux.
+    /// Config file only; there is no key for it.
+    pub windows_dot_is_hidden: bool,
     /// Does the filter care about upper/lower case?
     pub filter_case_sensitive: bool,
     /// Narrower windows hide the favourites panel.
@@ -530,6 +542,8 @@ impl Default for Ui {
     fn default() -> Self {
         Ui {
             show_hidden: false,
+            show_files: false,
+            windows_dot_is_hidden: true,
             filter_case_sensitive: false,
             min_width_for_favorites: 48,
             max_alias_len: 40,
@@ -655,8 +669,18 @@ impl Config {
 
         s.push_str("[ui]\n");
         s.push_str(&format!(
-            "# Show hidden folders from the start (cdx -h does the same).\nshow_hidden = {}\n",
+            "# Show hidden folders and files from the start (cdx -h does the same).\nshow_hidden = {}\n",
             b(self.ui.show_hidden)
+        ));
+        s.push_str(&format!(
+            "# List files as well as folders from the start (the toggle_files key flips it).\n\
+             # cdx cannot enter a file: choosing one takes you to the folder it is in.\nshow_files = {}\n",
+            b(self.ui.show_files)
+        ));
+        s.push_str(&format!(
+            "# Windows only: treat names that start with a dot as hidden, as on macOS and Linux.\n\
+             # (There is deliberately no key for this one.)\nwindows_dot_is_hidden = {}\n",
+            b(self.ui.windows_dot_is_hidden)
         ));
         s.push_str(&format!(
             "# Should the filter tell upper and lower case apart?\nfilter_case_sensitive = {}\n",
@@ -760,6 +784,10 @@ fn parse_into(mut cfg: Config, text: &str) -> (Config, Vec<String>) {
                 let u = &mut cfg.ui;
                 match key.as_str() {
                     "show_hidden" => set_bool(&mut u.show_hidden, value, n, &mut warns),
+                    "show_files" => set_bool(&mut u.show_files, value, n, &mut warns),
+                    "windows_dot_is_hidden" => {
+                        set_bool(&mut u.windows_dot_is_hidden, value, n, &mut warns)
+                    }
                     "filter_case_sensitive" => {
                         set_bool(&mut u.filter_case_sensitive, value, n, &mut warns)
                     }
@@ -958,6 +986,31 @@ mod tests {
         assert!(cfg.ui.show_hidden && cfg.ui.filter_case_sensitive && !cfg.macos_ask_again);
         assert_eq!(cfg.new_window_command.as_deref(), Some("kitty --directory {path}"));
         assert_eq!(parse("[new_window]\ncommand =\n").0.new_window_command, None);
+    }
+
+    #[test]
+    fn files_and_filter_have_their_own_default_keys() {
+        let cfg = Config::default();
+        let key = |c: char| cfg.keys.lookup(&ev(KeyCode::Char(c), KeyModifiers::NONE));
+        assert_eq!(key('f'), Some(Action::ToggleFiles));
+        assert_eq!(key('0'), Some(Action::Filter));
+        assert_eq!(key('/'), None, "slash is no longer the filter key");
+        assert!(!cfg.ui.show_files, "files are hidden by default");
+        assert!(cfg.ui.windows_dot_is_hidden);
+    }
+
+    #[test]
+    fn the_file_and_dot_settings_are_read_from_the_ini() {
+        let (cfg, warns) = parse("[ui]\nshow_files = yes\nwindows_dot_is_hidden = no\n");
+        assert!(warns.is_empty(), "{warns:?}");
+        assert!(cfg.ui.show_files && !cfg.ui.windows_dot_is_hidden);
+    }
+
+    #[test]
+    fn there_is_no_key_for_the_windows_dot_setting() {
+        assert!(Action::from_name("windows_dot_is_hidden").is_none());
+        let (_cfg, warns) = parse("[keys]\nwindows_dot_is_hidden = x\n");
+        assert!(warns.iter().any(|w| w.contains("unknown setting")), "{warns:?}");
     }
 
     #[test]
