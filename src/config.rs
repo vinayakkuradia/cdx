@@ -199,7 +199,9 @@ impl Action {
             Action::Select => "choose the highlighted folder (cd there)",
             Action::Cancel => "leave without changing folder (clears a filter first)",
             Action::ToggleHidden => "show or hide hidden folders and files",
-            Action::ToggleFiles => "show or hide files (choosing a file goes to the folder it is in)",
+            Action::ToggleFiles => {
+                "show or hide files (choosing a file goes to the folder it is in)"
+            }
             Action::Home => "jump to your home folder",
             Action::Bookmark => "bookmark the highlighted folder",
             Action::Filter => "start filtering by name",
@@ -620,7 +622,9 @@ impl Config {
     /// First run after an upgrade from a version that kept favourites elsewhere: copy them over.
     /// Only when everything is at its default place.
     pub fn migrate_legacy_favorites(&self) -> io::Result<bool> {
-        if non_empty_env(ENV_DIR).is_some() || self.favorites_file != Path::new(DEFAULT_FAVORITES_FILE) {
+        if non_empty_env(ENV_DIR).is_some()
+            || self.favorites_file != Path::new(DEFAULT_FAVORITES_FILE)
+        {
             return Ok(false);
         }
         match (legacy_favorites_path(), self.favorites_path()) {
@@ -665,7 +669,10 @@ impl Config {
         );
 
         s.push_str("[paths]\n# Relative to the cdx folder (where this file lives), or absolute.\n");
-        s.push_str(&format!("favorites_file = {}\n\n", self.favorites_file.display()));
+        s.push_str(&format!(
+            "favorites_file = {}\n\n",
+            self.favorites_file.display()
+        ));
 
         s.push_str("[ui]\n");
         s.push_str(&format!(
@@ -716,7 +723,11 @@ impl Config {
         s.push_str("[keys]\n# While browsing folders.\n");
         for action in self.keys.actions() {
             s.push_str(&format!("# {}\n", action.description()));
-            s.push_str(&format!("{} = {}\n", action.name(), join_keys(self.keys.keys(action))));
+            s.push_str(&format!(
+                "{} = {}\n",
+                action.name(),
+                join_keys(self.keys.keys(action))
+            ));
         }
         s.push_str("\n[keys.favorites]\n# While editing favourites (after toggle_favorites).\n");
         for action in self.fav_keys.actions() {
@@ -739,7 +750,14 @@ fn join_keys(keys: &[KeySpec]) -> String {
 // ===================================================================== parsing
 
 /// The section names a config file may contain.
-const SECTIONS: &[&str] = &["paths", "ui", "permissions", "new_window", "keys", "keys.favorites"];
+const SECTIONS: &[&str] = &[
+    "paths",
+    "ui",
+    "permissions",
+    "new_window",
+    "keys",
+    "keys.favorites",
+];
 
 /// Parse a config file on top of the defaults.
 #[cfg(test)]
@@ -791,9 +809,14 @@ fn parse_into(mut cfg: Config, text: &str) -> (Config, Vec<String>) {
                     "filter_case_sensitive" => {
                         set_bool(&mut u.filter_case_sensitive, value, n, &mut warns)
                     }
-                    "min_width_for_favorites" => {
-                        set_num(&mut u.min_width_for_favorites, value, 30, 200, n, &mut warns)
-                    }
+                    "min_width_for_favorites" => set_num(
+                        &mut u.min_width_for_favorites,
+                        value,
+                        30,
+                        200,
+                        n,
+                        &mut warns,
+                    ),
                     "max_alias_len" => set_num(&mut u.max_alias_len, value, 8, 100, n, &mut warns),
                     _ => false,
                 }
@@ -810,11 +833,20 @@ fn parse_into(mut cfg: Config, text: &str) -> (Config, Vec<String>) {
                 _ => false,
             },
             "keys" => set_keys(&mut cfg.keys, BROWSE_ACTIONS, &key, value, n, &mut warns),
-            "keys.favorites" => set_keys(&mut cfg.fav_keys, FAVORITES_ACTIONS, &key, value, n, &mut warns),
+            "keys.favorites" => set_keys(
+                &mut cfg.fav_keys,
+                FAVORITES_ACTIONS,
+                &key,
+                value,
+                n,
+                &mut warns,
+            ),
             _ => true, // unknown section: already reported
         };
         if !known {
-            warns.push(format!("config line {n}: unknown setting '{key}' in [{section}]"));
+            warns.push(format!(
+                "config line {n}: unknown setting '{key}' in [{section}]"
+            ));
         }
     }
 
@@ -845,7 +877,14 @@ fn set_bool(dst: &mut bool, value: &str, n: usize, warns: &mut Vec<String>) -> b
 
 /// Parse a number into `dst`, clamped to `min..=max`; a bad value leaves `dst` alone and warns.
 /// Always returns true (the setting name was known).
-fn set_num(dst: &mut usize, value: &str, min: usize, max: usize, n: usize, warns: &mut Vec<String>) -> bool {
+fn set_num(
+    dst: &mut usize,
+    value: &str,
+    min: usize,
+    max: usize,
+    n: usize,
+    warns: &mut Vec<String>,
+) -> bool {
     match value.parse::<usize>() {
         Ok(v) => *dst = v.clamp(min, max),
         Err(_) => warns.push(format!("config line {n}: '{value}' is not a number")),
@@ -940,14 +979,19 @@ mod tests {
         let (cfg, warns) = parse("[keys]\nbookmark = B ctrl-b\n");
         assert!(warns.is_empty(), "{warns:?}");
         assert_eq!(
-            cfg.keys.lookup(&ev(KeyCode::Char('B'), KeyModifiers::SHIFT)),
+            cfg.keys
+                .lookup(&ev(KeyCode::Char('B'), KeyModifiers::SHIFT)),
             Some(Action::Bookmark)
         );
         assert_eq!(
-            cfg.keys.lookup(&ev(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+            cfg.keys
+                .lookup(&ev(KeyCode::Char('b'), KeyModifiers::CONTROL)),
             Some(Action::Bookmark)
         );
-        assert_eq!(cfg.keys.lookup(&ev(KeyCode::Char('b'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            cfg.keys.lookup(&ev(KeyCode::Char('b'), KeyModifiers::NONE)),
+            None
+        );
     }
 
     #[test]
@@ -961,12 +1005,17 @@ mod tests {
     fn bad_input_warns_but_never_breaks_anything() {
         let text = "[keys]\nbookmark = banana\nfly = x\n[nonsense]\nui = 1\n[ui]\nshow_hidden = maybe\nmax_alias_len = lots\nno equals sign\n";
         let (cfg, warns) = parse(text);
-        assert_eq!(cfg.keys.keys(Action::Bookmark), Config::default().keys.keys(Action::Bookmark));
+        assert_eq!(
+            cfg.keys.keys(Action::Bookmark),
+            Config::default().keys.keys(Action::Bookmark)
+        );
         assert!(!cfg.ui.show_hidden);
         assert!(warns.len() >= 6, "{warns:?}");
         assert!(warns.iter().any(|w| w.contains("unknown key 'banana'")));
         assert!(warns.iter().any(|w| w.contains("unknown setting 'fly'")));
-        assert!(warns.iter().any(|w| w.contains("unknown section [nonsense]")));
+        assert!(warns
+            .iter()
+            .any(|w| w.contains("unknown section [nonsense]")));
     }
 
     #[test]
@@ -984,8 +1033,14 @@ mod tests {
         );
         assert!(warns.is_empty(), "{warns:?}");
         assert!(cfg.ui.show_hidden && cfg.ui.filter_case_sensitive && !cfg.macos_ask_again);
-        assert_eq!(cfg.new_window_command.as_deref(), Some("kitty --directory {path}"));
-        assert_eq!(parse("[new_window]\ncommand =\n").0.new_window_command, None);
+        assert_eq!(
+            cfg.new_window_command.as_deref(),
+            Some("kitty --directory {path}")
+        );
+        assert_eq!(
+            parse("[new_window]\ncommand =\n").0.new_window_command,
+            None
+        );
     }
 
     #[test]
@@ -1010,20 +1065,33 @@ mod tests {
     fn there_is_no_key_for_the_windows_dot_setting() {
         assert!(Action::from_name("windows_dot_is_hidden").is_none());
         let (_cfg, warns) = parse("[keys]\nwindows_dot_is_hidden = x\n");
-        assert!(warns.iter().any(|w| w.contains("unknown setting")), "{warns:?}");
+        assert!(
+            warns.iter().any(|w| w.contains("unknown setting")),
+            "{warns:?}"
+        );
     }
 
     #[test]
     fn conflicting_bindings_are_reported() {
         let (_cfg, warns) = parse("[keys]\nbookmark = j\n");
-        assert!(warns.iter().any(|w| w.contains("bound to both")), "{warns:?}");
+        assert!(
+            warns.iter().any(|w| w.contains("bound to both")),
+            "{warns:?}"
+        );
     }
 
     #[test]
     fn the_number_keys_and_ctrl_c_cannot_be_rebound() {
         let (cfg, warns) = parse("[keys]\nbookmark = 5\nhome = ctrl-c ~\n");
-        assert_eq!(warns.iter().filter(|w| w.contains("reserved")).count(), 2, "{warns:?}");
-        assert_eq!(cfg.keys.keys(Action::Bookmark), Config::default().keys.keys(Action::Bookmark));
+        assert_eq!(
+            warns.iter().filter(|w| w.contains("reserved")).count(),
+            2,
+            "{warns:?}"
+        );
+        assert_eq!(
+            cfg.keys.keys(Action::Bookmark),
+            Config::default().keys.keys(Action::Bookmark)
+        );
         assert_eq!(cfg.keys.keys(Action::Home).len(), 1, "the usable key stays");
     }
 
@@ -1035,7 +1103,9 @@ mod tests {
 
     #[test]
     fn key_names_parse_and_print_consistently() {
-        for text in ["k", "G", "/", "-", "space", "ctrl-x", "alt-left", "shift-up", "f5", "pageup", "~"] {
+        for text in [
+            "k", "G", "/", "-", "space", "ctrl-x", "alt-left", "shift-up", "f5", "pageup", "~",
+        ] {
             let spec = parse_key(text).unwrap();
             assert_eq!(parse_key(&spec.name()).unwrap(), spec, "{text}");
         }
@@ -1049,7 +1119,8 @@ mod tests {
         let mut cfg = Config::default();
         let shift_down = ev(KeyCode::Down, KeyModifiers::SHIFT);
         assert_eq!(cfg.keys.lookup(&shift_down), Some(Action::MoveDown));
-        cfg.keys.set(Action::PageDown, vec![parse_key("shift-down").unwrap()]);
+        cfg.keys
+            .set(Action::PageDown, vec![parse_key("shift-down").unwrap()]);
         assert_eq!(cfg.keys.lookup(&shift_down), Some(Action::PageDown));
         assert_eq!(
             cfg.keys.lookup(&ev(KeyCode::Down, KeyModifiers::NONE)),
@@ -1069,8 +1140,14 @@ mod tests {
     #[test]
     fn ctrl_and_alt_must_match_exactly() {
         let keys = KeyMap::browse_defaults();
-        assert_eq!(keys.lookup(&ev(KeyCode::Char('j'), KeyModifiers::CONTROL)), None);
-        assert_eq!(keys.lookup(&ev(KeyCode::Char('j'), KeyModifiers::ALT)), None);
+        assert_eq!(
+            keys.lookup(&ev(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+            None
+        );
+        assert_eq!(
+            keys.lookup(&ev(KeyCode::Char('j'), KeyModifiers::ALT)),
+            None
+        );
         assert_eq!(
             keys.lookup(&ev(KeyCode::Char('G'), KeyModifiers::SHIFT)),
             Some(Action::Bottom)
@@ -1090,10 +1167,19 @@ mod tests {
             data_dir: Some(PathBuf::from("/data/.cdx")),
             ..Config::default()
         };
-        assert_eq!(cfg.favorites_path(), Some(PathBuf::from("/data/.cdx/favorites.tsv")));
-        assert_eq!(cfg.config_path(), Some(PathBuf::from("/data/.cdx/config.ini")));
+        assert_eq!(
+            cfg.favorites_path(),
+            Some(PathBuf::from("/data/.cdx/favorites.tsv"))
+        );
+        assert_eq!(
+            cfg.config_path(),
+            Some(PathBuf::from("/data/.cdx/config.ini"))
+        );
         let elsewhere = env::temp_dir().join("favs.tsv");
-        let (mut abs, _) = parse(&format!("[paths]\nfavorites_file = {}\n", elsewhere.display()));
+        let (mut abs, _) = parse(&format!(
+            "[paths]\nfavorites_file = {}\n",
+            elsewhere.display()
+        ));
         abs.data_dir = Some(PathBuf::from("/data/.cdx"));
         assert_eq!(abs.favorites_path(), Some(elsewhere));
     }
@@ -1105,7 +1191,10 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let (old, new) = (dir.join("old.tsv"), dir.join("sub").join("new.tsv"));
 
-        assert!(!migrate_favorites(&old, &new).unwrap(), "nothing to migrate");
+        assert!(
+            !migrate_favorites(&old, &new).unwrap(),
+            "nothing to migrate"
+        );
         fs::write(&old, "A\t/a\n").unwrap();
         assert!(migrate_favorites(&old, &new).unwrap());
         assert_eq!(fs::read_to_string(&new).unwrap(), "A\t/a\n");

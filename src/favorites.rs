@@ -229,16 +229,30 @@ mod tests {
         let named = |p: &str, a: Option<&str>| fav(p, a);
         assert!(named("/x/anything", Some("config")).clashes_with_command());
         assert!(named("/x/anything", Some("Config")).clashes_with_command());
-        assert!(named("/x/config", None).clashes_with_command(), "unaliased: the folder name counts");
-        assert!(!named("/x/config", Some("settings")).clashes_with_command(), "an alias replaces the folder name");
+        assert!(
+            named("/x/config", None).clashes_with_command(),
+            "unaliased: the folder name counts"
+        );
+        assert!(
+            !named("/x/config", Some("settings")).clashes_with_command(),
+            "an alias replaces the folder name"
+        );
         assert!(!named("/x/configs", None).clashes_with_command());
         assert!(named("/x/init", None).clashes_with_command());
     }
 
     #[test]
     fn existing_clashes_are_found_with_their_slot() {
-        let favs = vec![fav("/a", None), fav("/b", Some("config")), fav("/c", None), fav("/x/init", None)];
-        assert_eq!(command_clashes(&favs), [(2, "config".to_string()), (4, "init".to_string())]);
+        let favs = vec![
+            fav("/a", None),
+            fav("/b", Some("config")),
+            fav("/c", None),
+            fav("/x/init", None),
+        ];
+        assert_eq!(
+            command_clashes(&favs),
+            [(2, "config".to_string()), (4, "init".to_string())]
+        );
         assert!(command_clashes(&[fav("/a", None)]).is_empty());
     }
 }

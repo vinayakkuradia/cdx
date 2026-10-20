@@ -160,7 +160,9 @@ fn deliver(path: &Path, new_window: Option<Option<&str>>) -> ExitCode {
 fn setup(hidden: bool) -> (Config, Vec<String>) {
     let (mut cfg, mut warnings) = Config::load();
     if let Err(e) = cfg.migrate_legacy_favorites() {
-        warnings.push(format!("could not copy your old favourites to the new place: {e}"));
+        warnings.push(format!(
+            "could not copy your old favourites to the new place: {e}"
+        ));
     }
     fsutil::set_ask_again(cfg.macos_ask_again);
     // The -h flag adds to the config; it cannot switch hidden folders off.
@@ -367,8 +369,15 @@ mod tests {
         let (work, other) = (root.join("projects"), root.join("other"));
         fs::create_dir_all(&work).unwrap();
         fs::create_dir_all(&other).unwrap();
-        let favs = vec![fav(other.clone(), Some("work")), fav(work.clone(), Some("Work"))];
-        assert_eq!(lookup("Work", &favs), Some(Ok(work.clone())), "exact beats case-insensitive");
+        let favs = vec![
+            fav(other.clone(), Some("work")),
+            fav(work.clone(), Some("Work")),
+        ];
+        assert_eq!(
+            lookup("Work", &favs),
+            Some(Ok(work.clone())),
+            "exact beats case-insensitive"
+        );
         assert_eq!(lookup("work", &favs), Some(Ok(other)));
         assert!(lookup("WORK", &favs).is_some());
         let unnamed = vec![fav(work.clone(), None)];
@@ -392,7 +401,10 @@ mod tests {
         let root = scratch("gone");
         let favs = vec![fav(root.join("gone"), Some("old"))];
         let msg = lookup("1", &favs).unwrap().unwrap_err();
-        assert!(msg.contains("no longer exists") && msg.contains("'old'"), "{msg}");
+        assert!(
+            msg.contains("no longer exists") && msg.contains("'old'"),
+            "{msg}"
+        );
         assert!(lookup("old", &favs).unwrap().is_err());
         let _ = fs::remove_dir_all(&root);
     }

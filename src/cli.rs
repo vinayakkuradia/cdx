@@ -206,7 +206,11 @@ mod tests {
     fn one_bare_word_or_digit_might_be_a_favourite_and_otherwise_is_cd() {
         assert_eq!(p(&["work"]), target("work", false, false, true));
         assert_eq!(p(&["3"]), target("3", false, false, true));
-        assert_eq!(p(&["10"]), target("10", false, false, true), "only 1-9 are slots, but it is still a plain word");
+        assert_eq!(
+            p(&["10"]),
+            target("10", false, false, true),
+            "only 1-9 are slots, but it is still a plain word"
+        );
     }
 
     #[test]
@@ -216,7 +220,10 @@ mod tests {
             p(&["config", "init", "--force"]),
             Request::Command("config".into(), vec!["init".into(), "--force".into()])
         );
-        assert_eq!(p(&["init", "bash"]), Request::Command("init".into(), vec!["bash".into()]));
+        assert_eq!(
+            p(&["init", "bash"]),
+            Request::Command("init".into(), vec!["bash".into()])
+        );
     }
 
     #[test]
@@ -276,7 +283,9 @@ mod tests {
         for w in ["work", "7", "my-proj", "Config"] {
             assert!(is_dial_candidate(w), "{w}");
         }
-        for w in ["", "-", "-x", ".", "..", "~", "a/b", "/a", "C:", "a\\b", ".hidden"] {
+        for w in [
+            "", "-", "-x", ".", "..", "~", "a/b", "/a", "C:", "a\\b", ".hidden",
+        ] {
             assert!(!is_dial_candidate(w), "{w}");
         }
         assert_eq!(dial_slot("1"), Some(0));

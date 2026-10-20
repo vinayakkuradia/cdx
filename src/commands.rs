@@ -178,7 +178,10 @@ mod tests {
         for name in ["work", "configs", "my-config", "con", "", "1", "initial"] {
             assert!(!is_reserved(name), "{name}");
         }
-        assert!(find("Config").is_none(), "commands themselves match exactly");
+        assert!(
+            find("Config").is_none(),
+            "commands themselves match exactly"
+        );
     }
 
     #[test]

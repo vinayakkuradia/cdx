@@ -7,6 +7,14 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
+# Rust links through the system C toolchain; without it `cargo install` fails late.
+if ! command -v cc >/dev/null 2>&1; then
+  echo "No C compiler/linker found (cc). Install your system's build tools first:" >&2
+  echo "  macOS:           xcode-select --install" >&2
+  echo "  Ubuntu / Debian: sudo apt install build-essential" >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cargo install --path "$ROOT" --locked
 

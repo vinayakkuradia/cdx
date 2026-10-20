@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: vinayakkuradia.Cdx
+PackageVersion: {{VERSION}}
+InstallerType: zip
+NestedInstallerType: portable
+ReleaseDate: {{DATE}}
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/{{REPO}}/releases/download/{{TAG}}/cdx-x86_64-pc-windows-msvc.zip
+    InstallerSha256: {{SHA_UPPER_X86_64_PC_WINDOWS_MSVC}}
+    NestedInstallerFiles:
+      - RelativeFilePath: cdx-x86_64-pc-windows-msvc\cdx-bin.exe
+        PortableCommandAlias: cdx-bin
+  - Architecture: arm64
+    InstallerUrl: https://github.com/{{REPO}}/releases/download/{{TAG}}/cdx-aarch64-pc-windows-msvc.zip
+    InstallerSha256: {{SHA_UPPER_AARCH64_PC_WINDOWS_MSVC}}
+    NestedInstallerFiles:
+      - RelativeFilePath: cdx-aarch64-pc-windows-msvc\cdx-bin.exe
+        PortableCommandAlias: cdx-bin
+ManifestType: installer
+ManifestVersion: 1.6.0

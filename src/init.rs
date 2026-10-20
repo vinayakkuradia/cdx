@@ -3,7 +3,7 @@
 //!
 //! The wrapper asks `cdx-bin` what to do:
 //! * a folder path: `cd` there;
-//! * the word [`PASS_TO_CD`]: this was ordinary `cd` usage, so run `cd` with the
+//! * the word `PASS_TO_CD`: this was ordinary `cd` usage, so run `cd` with the
 //!   original arguments;
 //! * nothing: stay where you are.
 //!
@@ -94,7 +94,9 @@ pub const SHELLS: &str = "bash, zsh, fish, powershell, cmd";
 
 /// Words the wrapper hands straight to `cdx-bin`: every command, plus the info flags.
 fn passthrough_words() -> Vec<&'static str> {
-    commands::names().chain(["--help", "-V", "--version"]).collect()
+    commands::names()
+        .chain(["--help", "-V", "--version"])
+        .collect()
 }
 
 /// The wrapper script for `shell`, or None if the shell is unknown.
@@ -112,7 +114,8 @@ fn script(shell: &str) -> Option<String> {
                 .iter()
                 .map(|w| format!("if /i \"%~1\"==\"{w}\" goto passthrough"))
                 .collect();
-            CMD.replace("{{CMD_CHECKS}}", &checks.join("\n")).replace('\n', "\r\n")
+            CMD.replace("{{CMD_CHECKS}}", &checks.join("\n"))
+                .replace('\n', "\r\n")
         }
         _ => return None,
     };

@@ -194,7 +194,11 @@ pub fn run(start: PathBuf, cfg: Config, startup_notice: Option<String>) -> io::R
 
     // Whatever order the favourites are in when we leave is the order we keep.
     state.flush();
-    let save_problem = if state.dirty { state.notice.take() } else { None };
+    let save_problem = if state.dirty {
+        state.notice.take()
+    } else {
+        None
+    };
     drop(guard);
     if let Some(msg) = save_problem {
         eprintln!("cdx: {msg}");
@@ -279,7 +283,11 @@ impl State {
                             entries.push(Entry {
                                 label: item.name,
                                 path: item.path,
-                                kind: if item.is_dir { Kind::Folder } else { Kind::File },
+                                kind: if item.is_dir {
+                                    Kind::Folder
+                                } else {
+                                    Kind::File
+                                },
                             });
                         }
                     }
@@ -296,7 +304,11 @@ impl State {
     /// matches anywhere in the name). The "." row is always kept.
     fn apply_filter(&mut self, focus: Option<&Path>) {
         let exact = self.cfg.ui.filter_case_sensitive;
-        let needle = if exact { self.filter.clone() } else { self.filter.to_lowercase() };
+        let needle = if exact {
+            self.filter.clone()
+        } else {
+            self.filter.to_lowercase()
+        };
         let entries: Vec<Entry> = self
             .all
             .iter()
@@ -447,12 +459,18 @@ impl State {
 
     /// How a key is shown in messages and the help line, e.g. `tab` or `↑`.
     fn nav_key(&self, action: Action) -> String {
-        self.cfg.keys.label(action).unwrap_or_else(|| "(unbound)".into())
+        self.cfg
+            .keys
+            .label(action)
+            .unwrap_or_else(|| "(unbound)".into())
     }
 
     /// Like `nav_key`, for the favourites-mode bindings.
     fn fav_key(&self, action: Action) -> String {
-        self.cfg.fav_keys.label(action).unwrap_or_else(|| "(unbound)".into())
+        self.cfg
+            .fav_keys
+            .label(action)
+            .unwrap_or_else(|| "(unbound)".into())
     }
 
     /// `b`: bookmark the highlighted item. On the "." row that is the folder we
@@ -819,7 +837,10 @@ impl State {
     fn draw(&mut self, out: &mut impl Write) -> io::Result<()> {
         let (w, h) = terminal::size()?;
         // Some terminals (and CI pseudo-terminals) report 0x0, meaning "unknown".
-        let (w, h) = (if w == 0 { 80 } else { w as usize }, if h == 0 { 24 } else { h as usize });
+        let (w, h) = (
+            if w == 0 { 80 } else { w as usize },
+            if h == 0 { 24 } else { h as usize },
+        );
         self.term_w = w;
         let list_h = h.saturating_sub(4).max(1);
         self.page = list_h.saturating_sub(1).max(1);
@@ -836,7 +857,11 @@ impl State {
         }
 
         let show_favs = w >= self.cfg.ui.min_width_for_favorites;
-        let lw = if show_favs { self.fav_panel_width(w) } else { 0 };
+        let lw = if show_favs {
+            self.fav_panel_width(w)
+        } else {
+            0
+        };
         let rx = if show_favs { lw + 3 } else { 0 };
         let rw = w.saturating_sub(rx).max(1);
         let in_favs = self.mode == Mode::Favs;
@@ -917,7 +942,8 @@ impl State {
         };
         let hidden = if self.show_hidden { "shown" } else { "off" };
         let files = self.entries.iter().filter(|e| e.kind == Kind::File).count();
-        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
         let sub = if !self.filter.is_empty() {
             format!("{count} of {total}  ·  hidden: {hidden}")
         } else if self.show_files {
@@ -949,7 +975,10 @@ impl State {
                 Kind::Drive | Kind::File => entry.label.clone(),
             };
             let selected = idx == self.cursor;
-            let line = fit(&format!("{} {}", if selected { "▸" } else { " " }, label), rw);
+            let line = fit(
+                &format!("{} {}", if selected { "▸" } else { " " }, label),
+                rw,
+            );
             let look = if selected && !in_favs {
                 Look::Cursor
             } else if selected || matches!(entry.kind, Kind::Here | Kind::File) || in_favs {
@@ -970,10 +999,22 @@ impl State {
                 input.target + 1,
                 input.buf
             );
-            put(out, 0, h.saturating_sub(2), &fit_left(&prompt, w), Look::Accent)?;
+            put(
+                out,
+                0,
+                h.saturating_sub(2),
+                &fit_left(&prompt, w),
+                Look::Accent,
+            )?;
         } else if self.filtering {
             let prompt = format!("filter: {}_", self.filter);
-            put(out, 0, h.saturating_sub(2), &fit_left(&prompt, w), Look::Accent)?;
+            put(
+                out,
+                0,
+                h.saturating_sub(2),
+                &fit_left(&prompt, w),
+                Look::Accent,
+            )?;
         } else if let Some(n) = &self.notice {
             put(out, 0, h.saturating_sub(2), &fit(n, w), Look::Notice)?;
         } else if !self.filter.is_empty() {
@@ -1076,7 +1117,12 @@ fn put(out: &mut impl Write, col: usize, row: usize, text: &str, look: Look) -> 
             )?;
         }
         Look::Accent => {
-            queue!(out, SetForegroundColor(Color::Cyan), Print(text), ResetColor)?;
+            queue!(
+                out,
+                SetForegroundColor(Color::Cyan),
+                Print(text),
+                ResetColor
+            )?;
         }
         Look::Cursor => {
             queue!(
@@ -1102,7 +1148,12 @@ fn put(out: &mut impl Write, col: usize, row: usize, text: &str, look: Look) -> 
             queue!(out, SetForegroundColor(Color::Red), Print(text), ResetColor)?;
         }
         Look::Notice => {
-            queue!(out, SetForegroundColor(Color::Yellow), Print(text), ResetColor)?;
+            queue!(
+                out,
+                SetForegroundColor(Color::Yellow),
+                Print(text),
+                ResetColor
+            )?;
         }
     }
     Ok(())
@@ -1229,7 +1280,11 @@ mod tests {
         type_text(&mut s, "i");
         assert_eq!(labels(&s), [".", "alpine"]);
         press(&mut s, &[KeyCode::Backspace]);
-        assert_eq!(labels(&s), [".", "alpha", "alpine"], "backspace widens it again");
+        assert_eq!(
+            labels(&s),
+            [".", "alpha", "alpine"],
+            "backspace widens it again"
+        );
     }
 
     #[test]
@@ -1274,7 +1329,10 @@ mod tests {
         assert!(out.is_none(), "this Esc only clears the filter");
         assert!(s.filter.is_empty());
         assert_eq!(labels(&s).len(), 5);
-        assert_eq!(s.entries[s.cursor].label, "alpha", "cursor stays on the same folder");
+        assert_eq!(
+            s.entries[s.cursor].label, "alpha",
+            "cursor stays on the same folder"
+        );
         let out = s.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(matches!(out, Some(Outcome::Cancelled)));
     }
@@ -1342,7 +1400,11 @@ mod tests {
         s.reload(None); // sorted: ".", config, fine, Init
         press(&mut s, &[KeyCode::Char('b')]); // on "config"
         assert!(s.favs.is_empty());
-        assert!(s.notice.as_deref().unwrap().contains("'config' is a cdx command"));
+        assert!(s
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("'config' is a cdx command"));
         press(&mut s, &[KeyCode::Char('j'), KeyCode::Char('b')]); // "fine"
         assert_eq!(s.favs.len(), 1);
         press(&mut s, &[KeyCode::Char('j'), KeyCode::Char('b')]); // "Init": case does not matter
@@ -1372,9 +1434,25 @@ mod tests {
         // Hand-made favourite: a folder called "init", aliased to something harmless.
         let dir = root.join("init");
         fs::create_dir(&dir).unwrap();
-        s.favs.push(Favorite { alias: Some("ok".into()), ..Favorite::new(dir) });
-        press(&mut s, &[KeyCode::Tab, KeyCode::Char('r'), KeyCode::Backspace, KeyCode::Backspace, KeyCode::Enter]); // empty alias
-        assert_eq!(s.favs[0].alias.as_deref(), Some("ok"), "refused: the folder name is reserved");
+        s.favs.push(Favorite {
+            alias: Some("ok".into()),
+            ..Favorite::new(dir)
+        });
+        press(
+            &mut s,
+            &[
+                KeyCode::Tab,
+                KeyCode::Char('r'),
+                KeyCode::Backspace,
+                KeyCode::Backspace,
+                KeyCode::Enter,
+            ],
+        ); // empty alias
+        assert_eq!(
+            s.favs[0].alias.as_deref(),
+            Some("ok"),
+            "refused: the folder name is reserved"
+        );
         assert!(s.notice.is_some());
     }
 
@@ -1431,14 +1509,19 @@ mod tests {
         assert!(select_outcome(&mut t, KeyCode::Right).is_some());
         // Folders still open normally.
         let (mut u, root_u) = files_setup("files4c", Config::default());
-        assert!(u.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).is_none());
+        assert!(u
+            .on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .is_none());
         assert_eq!(here(&u), root_u.join("alpha"));
     }
 
     #[test]
     fn bookmarking_a_file_bookmarks_its_folder() {
         let (mut s, root) = files_setup("files5", Config::default());
-        press(&mut s, &[KeyCode::Char('f'), KeyCode::End, KeyCode::Char('b')]);
+        press(
+            &mut s,
+            &[KeyCode::Char('f'), KeyCode::End, KeyCode::Char('b')],
+        );
         assert_eq!(s.favs.len(), 1);
         assert_eq!(s.favs[0].path, root);
     }
@@ -1527,8 +1610,12 @@ mod tests {
     fn unbinding_every_cancel_key_still_leaves_ctrl_c() {
         let cfg = cfg_from("[keys]\ncancel =\n");
         let (mut s, _root, _store) = setup_with("nocancel", &[], cfg);
-        assert!(s.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)).is_none());
-        assert!(s.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)).is_none());
+        assert!(s
+            .on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .is_none());
+        assert!(s
+            .on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
+            .is_none());
         let out = s.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(matches!(out, Some(Outcome::Cancelled)));
     }
@@ -1639,7 +1726,10 @@ mod tests {
         assert_eq!(s.mode, Mode::Favs);
         press(&mut s, &[KeyCode::Char(' '), KeyCode::Down]); // pick up "a", move it down
         assert_eq!(order(&s), ["b", "a", "c"]);
-        assert!(!store.exists(), "nothing is written until we leave favourites mode");
+        assert!(
+            !store.exists(),
+            "nothing is written until we leave favourites mode"
+        );
         press(&mut s, &[KeyCode::Char(' '), KeyCode::Tab]); // put down, finish
         assert_eq!(s.mode, Mode::Nav);
         assert_eq!(on_disk(&store), ["b", "a", "c"]);
@@ -1648,7 +1738,15 @@ mod tests {
     #[test]
     fn tab_while_holding_keeps_the_arrangement() {
         let (mut s, _root, store) = setup("tabhold", &["a", "b", "c"]);
-        press(&mut s, &[KeyCode::Tab, KeyCode::Down, KeyCode::Char(' '), KeyCode::Down]);
+        press(
+            &mut s,
+            &[
+                KeyCode::Tab,
+                KeyCode::Down,
+                KeyCode::Char(' '),
+                KeyCode::Down,
+            ],
+        );
         assert_eq!(order(&s), ["a", "c", "b"]);
         press(&mut s, &[KeyCode::Tab]);
         assert_eq!(on_disk(&store), ["a", "c", "b"]);
@@ -1657,7 +1755,15 @@ mod tests {
     #[test]
     fn esc_undoes_a_pick_up_then_leaves_the_mode() {
         let (mut s, _root, _store) = setup("undo", &["a", "b", "c"]);
-        press(&mut s, &[KeyCode::Tab, KeyCode::Char(' '), KeyCode::Down, KeyCode::Down]);
+        press(
+            &mut s,
+            &[
+                KeyCode::Tab,
+                KeyCode::Char(' '),
+                KeyCode::Down,
+                KeyCode::Down,
+            ],
+        );
         assert_eq!(order(&s), ["b", "c", "a"]);
         press(&mut s, &[KeyCode::Esc]);
         assert_eq!(order(&s), ["a", "b", "c"]);
@@ -1670,7 +1776,15 @@ mod tests {
     #[test]
     fn number_while_holding_sends_the_item_to_that_slot() {
         let (mut s, _root, store) = setup("slot", &["a", "b", "c"]);
-        press(&mut s, &[KeyCode::Tab, KeyCode::Char(' '), KeyCode::Char('3'), KeyCode::Tab]);
+        press(
+            &mut s,
+            &[
+                KeyCode::Tab,
+                KeyCode::Char(' '),
+                KeyCode::Char('3'),
+                KeyCode::Tab,
+            ],
+        );
         assert_eq!(on_disk(&store), ["b", "c", "a"]);
     }
 

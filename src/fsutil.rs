@@ -38,7 +38,9 @@ pub fn list_dir(dir: &Path, opts: ListOptions) -> io::Result<Vec<Item>> {
         let Ok(entry) = entry else { continue };
         let path = entry.path();
         // `fs::metadata` follows symlinks, so linked folders count as folders.
-        let Ok(meta) = fs::metadata(&path) else { continue };
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
         let is_dir = meta.is_dir();
         if !is_dir && !(opts.show_files && meta.is_file()) {
             continue;
@@ -102,7 +104,10 @@ fn ask_again(path: &Path, err: &io::Error) -> bool {
         return false;
     };
     // macOS sets this to the app the terminal belongs to (Terminal, iTerm2, ...).
-    let Some(app) = std::env::var("__CFBundleIdentifier").ok().filter(|s| !s.is_empty()) else {
+    let Some(app) = std::env::var("__CFBundleIdentifier")
+        .ok()
+        .filter(|s| !s.is_empty())
+    else {
         return false;
     };
     Command::new("tccutil")
@@ -259,7 +264,11 @@ mod tests {
     }
 
     fn names(root: &Path, o: ListOptions) -> Vec<String> {
-        list_dir(root, o).unwrap().into_iter().map(|i| i.name).collect()
+        list_dir(root, o)
+            .unwrap()
+            .into_iter()
+            .map(|i| i.name)
+            .collect()
     }
 
     #[test]
@@ -272,7 +281,10 @@ mod tests {
         fs::write(root.join("file.txt"), "x").unwrap();
 
         assert_eq!(names(&root, opts(false, false)), ["alpha", "Beta"]);
-        assert_eq!(names(&root, opts(true, false)), [".secret", "alpha", "Beta"]);
+        assert_eq!(
+            names(&root, opts(true, false)),
+            [".secret", "alpha", "Beta"]
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -285,7 +297,15 @@ mod tests {
         fs::write(root.join("A.txt"), "x").unwrap();
         let items = list_dir(&root, opts(false, true)).unwrap();
         let got: Vec<(&str, bool)> = items.iter().map(|i| (i.name.as_str(), i.is_dir)).collect();
-        assert_eq!(got, [("Alpha", true), ("zeta", true), ("A.txt", false), ("b.txt", false)]);
+        assert_eq!(
+            got,
+            [
+                ("Alpha", true),
+                ("zeta", true),
+                ("A.txt", false),
+                ("b.txt", false)
+            ]
+        );
         assert_eq!(items[2].path, root.join("A.txt"));
         let _ = fs::remove_dir_all(&root);
     }
@@ -313,7 +333,15 @@ mod tests {
         symlink(root.join("missing"), root.join("broken")).unwrap();
         let items = list_dir(&root, opts(false, true)).unwrap();
         let got: Vec<(&str, bool)> = items.iter().map(|i| (i.name.as_str(), i.is_dir)).collect();
-        assert_eq!(got, [("real", true), ("to-dir", true), ("data", false), ("to-file", false)]);
+        assert_eq!(
+            got,
+            [
+                ("real", true),
+                ("to-dir", true),
+                ("data", false),
+                ("to-file", false)
+            ]
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -324,8 +352,14 @@ mod tests {
         fs::create_dir(root.join(".cfg")).unwrap();
         fs::write(root.join(".env"), "x").unwrap();
         fs::create_dir(root.join("src")).unwrap();
-        let with = ListOptions { dot_is_hidden: true, ..opts(false, true) };
-        let without = ListOptions { dot_is_hidden: false, ..opts(false, true) };
+        let with = ListOptions {
+            dot_is_hidden: true,
+            ..opts(false, true)
+        };
+        let without = ListOptions {
+            dot_is_hidden: false,
+            ..opts(false, true)
+        };
         assert_eq!(names(&root, with), ["src"]);
         assert_eq!(names(&root, without), [".cfg", "src", ".env"]);
         let _ = fs::remove_dir_all(&root);
@@ -335,9 +369,18 @@ mod tests {
     fn privacy_prompts_apply_to_protected_folders_only() {
         let home = Path::new("/Users/me");
         let svc = |p: &str| tcc_service(Path::new(p), Some(home));
-        assert_eq!(svc("/Users/me/Documents"), Some("SystemPolicyDocumentsFolder"));
-        assert_eq!(svc("/Users/me/Desktop/x/y"), Some("SystemPolicyDesktopFolder"));
-        assert_eq!(svc("/Users/me/Downloads"), Some("SystemPolicyDownloadsFolder"));
+        assert_eq!(
+            svc("/Users/me/Documents"),
+            Some("SystemPolicyDocumentsFolder")
+        );
+        assert_eq!(
+            svc("/Users/me/Desktop/x/y"),
+            Some("SystemPolicyDesktopFolder")
+        );
+        assert_eq!(
+            svc("/Users/me/Downloads"),
+            Some("SystemPolicyDownloadsFolder")
+        );
         assert_eq!(svc("/Volumes/USB"), Some("SystemPolicyRemovableVolumes"));
         assert_eq!(svc("/Users/me/projects"), None);
         assert_eq!(svc("/Users/me/DocumentsOld"), None);

@@ -1,10 +1,16 @@
 [package]
 name = "cdx"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
-description = "Fast, cross-platform interactive directory navigator"
-license = "MIT"
+description = "Fast, cross-platform interactive directory navigator that extends cd"
+authors = ["Vinayak Kuradia <incognitifier@gmail.com>"]
+license = "MIT OR Apache-2.0"
 readme = "README.md"
+repository = "https://github.com/vinayakkuradia/cdx"
+homepage = "https://github.com/vinayakkuradia/cdx"
+# Distributed through GitHub releases, the install scripts and package managers, not
+# crates.io (the name `cdx` is taken there). This also stops an accidental `cargo publish`.
+publish = false
 
 # The binary is named cdx-bin; a tiny shell function named `cdx` wraps it
 # so the selected folder can actually change your shell's working directory.

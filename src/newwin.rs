@@ -19,8 +19,9 @@ pub fn open(dir: &Path, command: Option<&str>) -> io::Result<()> {
             Some((program, rest)) => {
                 let path = dir.to_string_lossy();
                 let args: Vec<String> = rest.iter().map(|w| w.replace("{path}", &path)).collect();
-                spawn(Command::new(program).args(&args).current_dir(dir))
-                    .map_err(|e| io::Error::new(e.kind(), format!("could not run '{program}': {e}")))
+                spawn(Command::new(program).args(&args).current_dir(dir)).map_err(|e| {
+                    io::Error::new(e.kind(), format!("could not run '{program}': {e}"))
+                })
             }
         },
     }
@@ -65,7 +66,9 @@ fn split_command(text: &str) -> Result<Vec<String>, String> {
 /// Start `cmd` without waiting for it, detached from our terminal so that
 /// closing this window does not close the new one.
 fn spawn(cmd: &mut Command) -> io::Result<()> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

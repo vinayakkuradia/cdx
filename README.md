@@ -1,8 +1,30 @@
-# cdx
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="cdx" width="240">
+  </picture>
+</p>
 
-A tiny, fast, cross-platform folder navigator for your terminal, and a drop-in
-extension of `cd`. Type `cdx`, browse, press **Space**, and your shell is now in that
-folder. Type `cdx ..` or `cdx -` and it is just `cd`.
+[![CI](https://github.com/vinayakkuradia/cdx/actions/workflows/ci.yml/badge.svg)](https://github.com/vinayakkuradia/cdx/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/vinayakkuradia/cdx)](https://github.com/vinayakkuradia/cdx/releases/latest)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+
+**A tiny, opinionated, intuitive, cross-platform extension of `cd`.** Type `cdx`, browse, press **Space**, and your shell switches to that folder. Type `cdx ..` or `cdx -` and it is just `cd`.
+
+```
+$ cdx                  # browse: arrows or h j k l, Space to go there
+$ cdx 1                # jump to your first favourite
+$ cdx work             # ...or to the favourite called "work"
+$ cdx ..               # anything else is plain cd
+```
+
+> **Status:** young and actively developed. It works on Windows, macOS and Linux, but
+> expect rough edges; please [report them](https://github.com/vinayakkuradia/cdx/issues).
+
+**Contents:** [Install](#install) · [Usage](#usage) · [Working as `cd`](#working-as-cd) ·
+[Files](#files) · [Filtering](#filtering) · [Favourites](#favourites) ·
+[Configuration](#configuration) · [How it works](#how-it-works) ·
+[Troubleshooting](#troubleshooting) · [Contributing](#contributing) · [License](#license)
 
 - Windows, macOS, Linux
 - Single native binary (~0.5 MB), no runtime, no background service, no GUI
@@ -15,8 +37,6 @@ folder. Type `cdx ..` or `cdx -` and it is just `cd`.
 - `cdx -n` opens the folder in a **new terminal window** instead
 
 ## Install
-
-Replace `vinayakkuradia/cdx` with this project's GitHub repository.
 
 **macOS / Linux**
 ```sh
@@ -63,16 +83,44 @@ Windows (x86_64, ARM64). Shells: bash, zsh, fish, PowerShell 5.1 and 7+, cmd.exe
 Windows editions), profile scripts are blocked. The installer tells you if so; fix with
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
+### Other ways to install
+
+| Method | Command |
+|---|---|
+| Homebrew (macOS, Linux) | `brew install vinayakkuradia/tap/cdx` |
+| Scoop (Windows) | `scoop bucket add vinayakkuradia https://github.com/vinayakkuradia/scoop-bucket` then `scoop install cdx` |
+| winget (Windows) | `winget install vinayakkuradia.Cdx` |
+| Cargo (any OS, builds from source) | `cargo install --git https://github.com/vinayakkuradia/cdx` |
+
+The package-manager entries appear once the maintainer has published them; the install
+scripts above always work. After any of these, add the one shell line described in
+[Manual shell setup](#manual-shell-setup). The installers do that for you; package
+managers and Cargo do not.
+
 ### Build from source
 
-Needs the [Rust toolchain](https://rustup.rs):
+Building needs the Rust toolchain **and** your system's C build tools (Rust links
+through them). Install the tools for your system first:
+
+| System | Install |
+|---|---|
+| **Windows** | [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/) with the **C++ (MSVC)** workload |
+| **macOS** | Command Line Tools for Xcode: `xcode-select --install` |
+| **Linux (Ubuntu / Debian)** | `sudo apt install build-essential` |
+
+Then install Rust with [rustup](https://rustup.rs) and run the developer installer, which
+builds cdx and wires up your shell:
 
 ```sh
+git clone https://github.com/vinayakkuradia/cdx.git && cd cdx
 ./scripts/dev-install.sh        # macOS / Linux
 ```
 ```powershell
 .\scripts\dev-install.ps1       # Windows
 ```
+
+Or just `cargo install --git https://github.com/vinayakkuradia/cdx` (no clone needed), or
+`cargo build --release` inside a clone. The program they produce is named `cdx-bin`.
 
 ### Manual shell setup
 
@@ -382,45 +430,76 @@ that the shell integration is not active.
 ## Project layout
 
 ```
-src/main.rs      glue: what each kind of request does, printing the result
-src/cli.rs       reading the command line, deciding what is cdx's and what is `cd`'s
-src/commands.rs  cdx's own commands (init, config) and the reserved-name list
-src/browser.rs   the interactive browser (state, keys, drawing, favourites panel)
-src/config.rs    settings, key bindings, config.ini parsing, data folder paths
-src/favorites.rs favourites: data, file format, load/save
-src/newwin.rs    `cdx -n`: opening a new terminal window
-src/fsutil.rs    folder listing, hidden detection, Windows drives, paths
-src/init.rs      shell wrappers for bash/zsh/fish/PowerShell/cmd
-install.sh       user installer for macOS / Linux (shipped with each release)
-install.ps1      user installer for Windows (shipped with each release)
-scripts/         developer installers that build from source
-.cargo/          static C runtime on Windows (no VC++ redistributable needed)
-.github/         CI, and the release workflow
+src/main.rs        glue: what each kind of request does, printing the result
+src/cli.rs         reading the command line, deciding what is cdx's and what is `cd`'s
+src/commands.rs    cdx's own commands (init, config) and the reserved-name list
+src/browser.rs     the interactive browser (state, keys, drawing, favourites panel)
+src/config.rs      settings, key bindings, config.ini parsing, data folder paths
+src/favorites.rs   favourites: data, file format, load/save
+src/newwin.rs      `cdx -n`: opening a new terminal window
+src/fsutil.rs      folder listing, hidden detection, Windows drives, paths
+src/init.rs        shell wrappers for bash/zsh/fish/PowerShell/cmd
+install.sh         user installer for macOS / Linux (shipped with each release)
+install.ps1        user installer for Windows (shipped with each release)
+scripts/           developer installers, shell-integration test, packaging renderer
+packaging/         Homebrew, Scoop and winget templates (see packaging/README.md)
+.cargo/            static C runtime on Windows (no VC++ redistributable needed)
+.github/           CI, audit and release workflows, issue and pull request templates
 ```
 
-## Development
+## Troubleshooting
 
-```sh
-cargo run -- -h          # runs the UI (no cd happens without the wrapper)
-cargo test
-cargo build --release    # LTO + strip, around 0.5 MB
-```
+**`cdx` does nothing or prints "shell integration is not active".** The shell function is
+missing. Add the line for your shell from [Manual shell setup](#manual-shell-setup) and
+open a new terminal. `type cdx` should say it is a function (cmd.exe: a `cdx.cmd` file).
 
-## Releasing
+**`cdx: command not found`.** The install folder is not on your `PATH`: `~/.local/bin`
+(macOS/Linux), `%LOCALAPPDATA%\cdx\bin` (Windows), or `~/.cargo/bin` for Cargo. Open a
+new terminal after installing.
 
-1. Bump `version` in `Cargo.toml`, run `cargo build` (updates `Cargo.lock`), commit and push.
-2. Tag and push, using the same `X.Y.Z` as in `Cargo.toml`: `git tag vX.Y.Z && git push origin vX.Y.Z`
-3. The **release** workflow builds six targets, packages them with checksums, stamps your
-   repository into `install.sh` / `install.ps1`, and publishes a GitHub release.
-   It refuses to run if the tag does not match the version in `Cargo.toml`.
+**My config is ignored, or a message mentions "config".** Run `cdx-bin config check`; it
+lists every mistake with its line number. Mistakes never stop cdx; the bad line is skipped.
 
-Each release contains `cdx-<target>.tar.gz` / `.zip`, a matching `.sha256`, and the two installers.
+**A key does not work.** Another program may capture it (some terminals take `ctrl-` and
+`alt-` combinations). Rebind it in `config.ini` (see [Configuration](#configuration)).
+
+**macOS: "Operation not permitted" in Desktop, Documents or Downloads.** Allow your
+terminal under *System Settings > Privacy & Security > Files and Folders*, or see
+[Permissions](#permissions).
+
+**`cargo build` fails with "linker `cc` not found" or "link.exe not found".** Install your
+system's C build tools; see [Build from source](#build-from-source).
+
+**Still stuck?** Open an [issue](https://github.com/vinayakkuradia/cdx/issues/new/choose)
+and include the output of `cdx-bin --version` and `cdx-bin config check`.
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. Please read
+[CONTRIBUTING.md](CONTRIBUTING.md) first (it also lists what you need to build), and
+follow the [Code of Conduct](CODE_OF_CONDUCT.md). The history of changes is in
+[CHANGELOG.md](CHANGELOG.md).
+
+Security problems: please report them privately, see [SECURITY.md](SECURITY.md).
 
 ## Ideas for next steps
 
-- Homebrew tap and Scoop bucket (the release assets are already in the right shape)
-- Signed/notarized macOS binary and signed Windows binary, to avoid SmartScreen/Gatekeeper prompts
+- Recent-folder ranking
+- Mouse support and a preview of the highlighted folder
+- Shell completions for favourite names
+- Signed and notarized macOS binary and signed Windows binary, to avoid
+  Gatekeeper / SmartScreen prompts
 - A Windows MSI for managed environments
-- `cdx -n`: open the selection in a new terminal window instead of `cd`
-- Type-to-filter and recent-folder ranking
-- Mouse support
+
+## License
+
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT license](LICENSE-MIT)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for
+inclusion in cdx by you, as defined in the Apache-2.0 license, shall be dual licensed as
+above, without any additional terms or conditions.
