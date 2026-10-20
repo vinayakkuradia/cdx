@@ -1,0 +1,70 @@
+name: Bug report
+description: Something does not work the way the README says it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The more exact the steps, the faster it gets fixed.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact keys pressed or the exact command typed.
+      placeholder: |
+        1. cd into ...
+        2. run `cdx ...`
+        3. press ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: cdx version
+      description: Output of `cdx-bin --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Linux, Windows]
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version and CPU
+      placeholder: "e.g. macOS 14 on Apple Silicon, Ubuntu 24.04 x86_64, Windows 11 ARM64"
+    validations:
+      required: true
+  - type: dropdown
+    id: shell
+    attributes:
+      label: Shell
+      options: [bash, zsh, fish, "PowerShell 7+", "Windows PowerShell 5.1", cmd.exe, other]
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal app
+      placeholder: "e.g. Terminal.app, iTerm2, Windows Terminal, GNOME Terminal, VS Code"
+  - type: textarea
+    id: config
+    attributes:
+      label: Output of `cdx-bin config check`
+      description: Tells us whether your config.ini has mistakes. Paste your config too if it is relevant.
+      render: shell
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options: [install script, "cargo install --git", Homebrew, Scoop, winget, built from source, other]

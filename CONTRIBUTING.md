@@ -62,6 +62,22 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
 cargo build --locked && bash scripts/test-shell-integration.sh target/debug/cdx-bin   # macOS / Linux
 ```
 
+## Recording the demo
+
+The animated demo is scripted with [VHS](https://github.com/charmbracelet/vhs), so it can
+be re-recorded whenever the interface changes. VHS needs `ttyd` and `ffmpeg` (see its
+install page); then, from the repository root:
+
+```sh
+cargo build --release
+PATH="$PWD/target/release:$PATH" vhs assets/demo.tape    # writes assets/demo.gif
+```
+
+`assets/demo.tape` is the script; `scripts/demo-setup.sh` builds a throw-away home folder
+with sample projects for it to browse, so your own favourites and config are never used.
+Keep the demo short (about 25 seconds) and update it when you change a key or a feature
+it shows.
+
 ## Code guidelines
 
 - **Document everything.** Every function, struct, enum, variant, field, constant and

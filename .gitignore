@@ -1,2 +1,6 @@
 /target
-edit.md
+
+# Coverage and packaging output
+lcov.info
+*.profraw
+/packaging-out/

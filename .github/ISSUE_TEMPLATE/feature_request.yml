@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an improvement or a new feature
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe what you are trying to do and why it is awkward today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?
+      description: Keys, commands or settings you have in mind are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Fit
+      options:
+        - label: It should work the same on Windows, macOS and Linux (or I explain why not above).
+        - label: It must not break plain `cd` behaviour (`cdx ..`, `cdx -`, ...).

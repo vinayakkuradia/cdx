@@ -18,6 +18,10 @@ $ cdx work             # ...or to the favourite called "work"
 $ cdx ..               # anything else is plain cd
 ```
 
+<!-- After recording the demo (see CONTRIBUTING.md, "Recording the demo"), uncomment:
+![cdx demo](assets/demo.gif)
+-->
+
 > **Status:** young and actively developed. It works on Windows, macOS and Linux, but
 > expect rough edges; please [report them](https://github.com/vinayakkuradia/cdx/issues).
 
