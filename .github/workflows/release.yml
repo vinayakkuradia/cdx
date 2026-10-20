@@ -1,7 +1,7 @@
 name: release
 
 # Publish a release by pushing a version tag that matches Cargo.toml:
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git tag vX.Y.Z && git push origin vX.Y.Z
 on:
   push:
     tags: ["v*"]
@@ -48,7 +48,7 @@ jobs:
         run: |
           name="cdx-${{ matrix.target }}"
           mkdir "$name"
-          cp "target/${{ matrix.target }}/release/cdx-bin" README.md LICENSE "$name/"
+          cp "target/${{ matrix.target }}/release/cdx-bin" README.md LICENSE-MIT LICENSE-APACHE "$name/"
           tar czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
 
@@ -58,7 +58,7 @@ jobs:
         run: |
           $name = "cdx-${{ matrix.target }}"
           New-Item -ItemType Directory $name | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/cdx-bin.exe", "README.md", "LICENSE" $name
+          Copy-Item "target/${{ matrix.target }}/release/cdx-bin.exe", "README.md", "LICENSE-MIT", "LICENSE-APACHE" $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
           $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
@@ -91,6 +91,17 @@ jobs:
         run: |
           cp install.sh install.ps1 dist/
           sed -i "s|__REPO__|${GITHUB_REPOSITORY}|g" dist/install.sh dist/install.ps1
+
+      - name: Render package-manager manifests (Homebrew, Scoop, winget)
+        run: |
+          sh scripts/render-packaging.sh "${GITHUB_REF_NAME}" dist packaging-out
+          ls -R packaging-out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaging-manifests
+          path: packaging-out
+          if-no-files-found: error
 
       - name: Publish GitHub release
         env:

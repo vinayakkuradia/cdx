@@ -3,7 +3,7 @@
 #   irm https://github.com/__REPO__/releases/latest/download/install.ps1 | iex
 #
 # Environment variables (set before running):
-#   CDX_VERSION            release tag to install, e.g. v0.1.0   (default: latest)
+#   CDX_VERSION            release tag to install, e.g. vX.Y.Z   (default: latest)
 #   CDX_INSTALL_DIR        where to put cdx-bin.exe              (default: %LOCALAPPDATA%\cdx\bin)
 #   CDX_NO_MODIFY_SHELL=1  do not touch PowerShell profiles
 #   CDX_BASE_URL           override the download location (mirrors, testing)

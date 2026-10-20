@@ -1,1 +1,6 @@
 /target
+
+# Coverage and packaging output
+lcov.info
+*.profraw
+/packaging-out/

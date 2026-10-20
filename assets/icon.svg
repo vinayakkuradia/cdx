@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100" height="100" viewBox="0 0 100 100">
+  <title>icon.svg</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <g>
+      <path d="M51.855 43.699 L83.32 12.197 L71.035 12.197 L39.161 43.699 L86.171 93.18 L97.637 93.18 Z" fill="#e66d28"/>
+      <path d="M37.214 43.699 L5.765 12.197 L18.045 12.197 L49.903 43.699 L17.997 77.21 L6.536 77.21 Z" fill="#2a2b2c"/>
+      <path d="M39.174 43.699 L7.726 12.197 L20.004 12.197 L51.862 43.699 L19.956 77.21 L8.495 77.21 Z" fill="#2a2b2c"/>
+    </g>
+  </g>
+</svg>

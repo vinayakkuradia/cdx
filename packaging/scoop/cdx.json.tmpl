@@ -1,0 +1,41 @@
+{
+    "version": "{{VERSION}}",
+    "description": "Fast, cross-platform interactive directory navigator that extends cd",
+    "homepage": "https://github.com/{{REPO}}",
+    "license": "MIT|Apache-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/{{REPO}}/releases/download/{{TAG}}/cdx-x86_64-pc-windows-msvc.zip",
+            "hash": "{{SHA_X86_64_PC_WINDOWS_MSVC}}",
+            "extract_dir": "cdx-x86_64-pc-windows-msvc"
+        },
+        "arm64": {
+            "url": "https://github.com/{{REPO}}/releases/download/{{TAG}}/cdx-aarch64-pc-windows-msvc.zip",
+            "hash": "{{SHA_AARCH64_PC_WINDOWS_MSVC}}",
+            "extract_dir": "cdx-aarch64-pc-windows-msvc"
+        }
+    },
+    "bin": "cdx-bin.exe",
+    "notes": "To change folders with cdx, add the shell function to your PowerShell profile: Invoke-Expression (& cdx-bin init powershell | Out-String)",
+    "checkver": {
+        "github": "https://github.com/{{REPO}}"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/{{REPO}}/releases/download/v$version/cdx-x86_64-pc-windows-msvc.zip",
+                "hash": {
+                    "url": "$url.sha256"
+                },
+                "extract_dir": "cdx-x86_64-pc-windows-msvc"
+            },
+            "arm64": {
+                "url": "https://github.com/{{REPO}}/releases/download/v$version/cdx-aarch64-pc-windows-msvc.zip",
+                "hash": {
+                    "url": "$url.sha256"
+                },
+                "extract_dir": "cdx-aarch64-pc-windows-msvc"
+            }
+        }
+    }
+}

@@ -7,7 +7,9 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 
 $root = Split-Path -Parent $PSScriptRoot
 cargo install --path $root --locked
-if ($LASTEXITCODE -ne 0) { throw "cargo install failed" }
+if ($LASTEXITCODE -ne 0) {
+    throw "cargo install failed. If the message above mentions link.exe, install Build Tools for Visual Studio with the C++ (MSVC) workload: https://visualstudio.microsoft.com/downloads/"
+}
 
 $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
 $bin = Join-Path $cargoHome 'bin'
