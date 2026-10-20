@@ -484,8 +484,8 @@ Security problems: please report them privately, see [SECURITY.md](SECURITY.md).
 
 ## Ideas for next steps
 
-- Recent-folder ranking
-- Mouse support and a preview of the highlighted folder
+- Recent-folder speed dial
+- Mouse support
 - Shell completions for favourite names
 - Signed and notarized macOS binary and signed Windows binary, to avoid
   Gatekeeper / SmartScreen prompts
