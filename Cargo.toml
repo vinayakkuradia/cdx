@@ -19,7 +19,7 @@ name = "cdx-bin"
 path = "src/main.rs"
 
 [dependencies]
-crossterm = "0.28"
+crossterm = "0.29"
 
 [profile.release]
 opt-level = 3
