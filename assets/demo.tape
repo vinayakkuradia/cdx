@@ -18,12 +18,16 @@ Output assets/demo.gif
 Require cdx-bin
 Require bash
 
+# Boost responsiveness and framerate
+Set Framerate 60
+Set PlaybackSpeed 1.3
+
 Set Shell "bash"
 Set FontSize 20
 Set Width 1100
 Set Height 620
 Set Padding 24
-Set Theme "Catppuccin Mocha"
+Set Theme "Catppuccin Macchiato"
 Set WindowBar Colorful
 Set BorderRadius 10
 Set Framerate 24
@@ -39,11 +43,11 @@ Sleep 500ms
 Show
 
 # ---- 1. Browse, then jump ----------------------------------------------------
-Type "# browse, then jump"
-Sleep 300ms
+Type "# browse, then jump using space"
+Sleep 500ms
 Enter
 Type "cdx"
-Sleep 300ms
+Sleep 800ms
 Enter
 Sleep 900ms
 Right
@@ -56,10 +60,10 @@ Sleep 1200ms
 # ---- 2. Favourites and speed dial --------------------------------------------
 Ctrl+L
 Type "# bookmark with b, then speed dial"
-Sleep 300ms
+Sleep 500ms
 Enter
 Type "cdx"
-Sleep 300ms
+Sleep 500ms
 Enter
 Sleep 800ms
 Left
@@ -82,10 +86,10 @@ Sleep 1200ms
 # ---- 3. Filter as you type ---------------------------------------------------
 Ctrl+L
 Type "# filter as you type"
-Sleep 300ms
+Sleep 500ms
 Enter
 Type "cdx"
-Sleep 300ms
+Sleep 500ms
 Enter
 Sleep 800ms
 Left
@@ -102,7 +106,7 @@ Sleep 1200ms
 # ---- 4. And it is still just cd ----------------------------------------------
 Ctrl+L
 Type "# and it is still just cd"
-Sleep 300ms
+Sleep 500ms
 Enter
 Type "cdx .."
 Sleep 200ms
