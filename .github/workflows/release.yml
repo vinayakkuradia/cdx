@@ -81,7 +81,7 @@ jobs:
           grep -q "^version = \"${version}\"" Cargo.toml \
             || { echo "Tag ${GITHUB_REF_NAME} does not match the version in Cargo.toml"; exit 1; }
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: dist-*
