@@ -63,7 +63,7 @@ jobs:
           $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
           path: cdx-${{ matrix.target }}.*
@@ -97,7 +97,7 @@ jobs:
           sh scripts/render-packaging.sh "${GITHUB_REF_NAME}" dist packaging-out
           ls -R packaging-out
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: packaging-manifests
           path: packaging-out
